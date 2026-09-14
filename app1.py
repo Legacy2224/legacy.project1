@@ -50,22 +50,37 @@ st.markdown(
 
 # 3. App Title & Subtitle
 st.title("✨ AI Story & Animation Studio")
-st.write("Enter a title below, and watch your story and animation come to life!")
+st.write("Enter a title below, set your word limit, and watch your story and animation come to life!")
 
-# 4. User Input
-story_title = st.text_input("Enter your Story Title:", placeholder="e.g., The Secret of the Neon Forest")
+# 4. User Inputs
+col_input, col_slider = st.columns([2, 1])
+
+with col_input:
+    story_title = st.text_input("Enter your Story Title:", placeholder="e.g., The Secret of the Neon Forest")
+
+with col_slider:
+    # 📏 Word Limit Feature (Scrollable & Editable Slider)
+    word_limit = st.slider(
+        label="📏 Select Word Limit:",
+        min_value=0,
+        max_value=1000,
+        value=250,  # Default word limit
+        step=10,
+        help="Drag the slider or click the number box to type your exact word limit (0–1000)."
+    )
 
 # 5. Core Application Logic
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
     # Story Generation Logic (Placeholder - Replace with OpenAI API call in production)
-    with st.spinner("Writing your story..."):
+    with st.spinner(f"Writing your story (~{word_limit} words)..."):
         time.sleep(1) # Simulates generation time
         story_text = (
             f"Once upon a time in a world inspired by '{story_title}', magical lights began to glow. "
             f"The main character stepped forward, discovering an ancient secret that changed the universe forever. "
-            f"Every step brought new color, mystery, and excitement to their unbelievable journey."
+            f"Every step brought new color, mystery, and excitement to their unbelievable journey. "
+            f"(Target Length: {word_limit} words)"
         )
     
     # Display Story in a styled card
