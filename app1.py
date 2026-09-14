@@ -1,8 +1,8 @@
 import tempfile
 import time
 import requests
+import urllib.parse
 import streamlit as st
-import replicate
 from google import genai
 
 # -------------------------------------------------------------------
@@ -24,14 +24,13 @@ except Exception as e:
     st.error(f"Error initializing Gemini Client: {e}. Check your Streamlit Secrets.")
 
 # -------------------------------------------------------------------
-# 2. Sidebar Customization (User-selected colors)
+# 2. Sidebar Customization
 # -------------------------------------------------------------------
 st.sidebar.title("⚙️ Custom Styling")
 bg_color = st.sidebar.color_picker("Pick App Background Color", "#F0F2F6")
 text_color = st.sidebar.color_picker("Pick Text Color", "#1F1F1F")
 card_color = st.sidebar.color_picker("Pick Card Background Color", "#FFFFFF")
 
-# Apply custom styling dynamically with CSS
 st.markdown(
     f"""
     <style>
@@ -55,14 +54,11 @@ st.markdown(
 )
 
 # -------------------------------------------------------------------
-# 3. App Title & Subtitle
+# 3. App Title & Inputs
 # -------------------------------------------------------------------
 st.title("✨ AI Story & Animation Studio")
-st.write("Enter a title, set your desired word limit, and generate a fully customized story and animation!")
+st.write("Enter a title, set your desired word limit, and generate a fully customized story and visual!")
 
-# -------------------------------------------------------------------
-# 4. User Inputs
-# -------------------------------------------------------------------
 col_input, col_slider = st.columns([2, 1])
 
 with col_input:
@@ -75,7 +71,7 @@ with col_slider:
         max_value=1000,
         value=300,
         step=25,
-        help="Drag the slider or click the number box to type your word limit (50–1000 words)."
+        help="Drag the slider or type your target word limit."
     )
 
 # -------------------------------------------------------------------
@@ -83,14 +79,12 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates a story using gemini-3.1-flash-lite (high free-tier limits)."""
+    """Generates story using gemini-3.1-flash-lite (high free limits)."""
     prompt = (
         f"Write an immersive, detailed, creative story strictly titled '{title}'. "
         f"The storyline must be deeply centered around this title. "
-        f"Target word count: strictly around {limit} words. Do not make it brief or summarize—write out the full narrative."
+        f"Target word count: strictly around {limit} words."
     )
-    
-    # Using gemini-3.1-flash-lite to prevent 429 Resource Exhausted errors
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite",
         contents=prompt,
@@ -98,23 +92,15 @@ def generate_gemini_story(title: str, limit: int) -> str:
     return response.text
 
 
-def generate_free_animation(title: str, story: str) -> str:
-    """Generates a free video using Replicate's zero-scope video model."""
-    video_prompt = f"Cinematic 3D animation visual based on '{title}': {story[:200]}"
-    
-    # Run open-source video generation via Replicate API
-    output = replicate.run(
-        "anotherjesse/zeroscope-v2-xl:9f747673945c62801b13b84701c783929c0eed26e52c2e145bab317e07b3d7a9",
-        input={"prompt": video_prompt}
-    )
-    
-    # Replicate returns a URL to the MP4 file
-    if isinstance(output, list) and len(output) > 0:
-        return output[0]
-    return output
+def generate_free_pollinations_image(title: str, story: str) -> str:
+    """Generates 100% free visual illustration via Pollinations AI (no API key needed)."""
+    clean_prompt = f"3D animation cinematic illustration of {title}, high quality fantasy concept art"
+    encoded_prompt = urllib.parse.quote(clean_prompt)
+    image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true"
+    return image_url
 
 # -------------------------------------------------------------------
-# 5. Core Application Logic
+# 4. Core Application Logic
 # -------------------------------------------------------------------
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
@@ -122,44 +108,30 @@ if story_title:
     with st.spinner(f"Writing a ~{word_limit}-word story about '{story_title}'..."):
         try:
             story_text = generate_gemini_story(story_title, word_limit)
-            
-            # Count actual words generated
             actual_word_count = len(story_text.split())
             
-            # Display Story in card
             st.markdown(f'<div class="story-card">{story_text}</div>', unsafe_allow_html=True)
             st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target: {word_limit} words)")
 
             # -------------------------------------------------------
-            # 6. Video Generation
+            # 5. Visual Animation Section
             # -------------------------------------------------------
             st.write("---")
             st.write("### Do you like this story?")
             
-            if st.button("👍 Yes, generate animation!"):
-                st.info("Story approved! Generating video via Replicate (takes ~30-60 seconds)...")
-                
-                with st.spinner("Rendering animation..."):
-                    try:
-                        video_url = generate_free_animation(story_title, story_text)
-                        
-                        st.write("### 🎬 Generated Animation")
-                        # Display video directly from the URL
-                        st.video(video_url)
-                        st.success("Animation generated successfully!")
-                    
-                    except Exception as vid_err:
-                        st.error(
-                            f"Error generating video: {vid_err}\n\n"
-                            "Make sure `REPLICATE_API_TOKEN` is added to your Streamlit secrets."
-                        )
+            if st.button("👍 Yes, generate visual animation!"):
+                with st.spinner("Creating visual artwork..."):
+                    visual_url = generate_free_pollinations_image(story_title, story_text)
+                    st.write("### 🎬 Animated Story Scene")
+                    st.image(visual_url, caption=f"Visual representation for '{story_title}'", use_column_width=True)
+                    st.success("Visual generated for free with zero rate limits!")
 
         except Exception as e:
             if "429" in str(e):
-                st.error("Free rate limit reached for Gemini. Please wait 30 seconds and try clicking generate again.")
+                st.error("Free rate limit reached for Gemini. Please wait 15 seconds and try again.")
             else:
                 st.error(f"Error generating story: {e}")
 
 # Sidebar Info
 st.sidebar.write("---")
-st.sidebar.info("Ensure `streamlit`, `google-genai`, and `replicate` are in your `requirements.txt` file!")
+st.sidebar.info("Ensure `streamlit` and `google-genai` are in your `requirements.txt` file!")
