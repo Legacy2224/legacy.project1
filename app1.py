@@ -1,5 +1,6 @@
-import urllib.parse
+import time
 import streamlit as st
+import replicate
 from google import genai
 
 # -------------------------------------------------------------------
@@ -18,7 +19,11 @@ try:
     else:
         client = genai.Client()
 except Exception as e:
-    st.error(f"Error initializing Gemini Client: {e}. Please check your Streamlit Secrets.")
+    st.error(f"Error initializing Gemini Client: {e}. Check your Secrets configuration.")
+
+# Check for Replicate Token
+if "REPLICATE_API_TOKEN" not in st.secrets:
+    st.warning("⚠️ `REPLICATE_API_TOKEN` missing in Streamlit Secrets. Video generation will fail without it.")
 
 # -------------------------------------------------------------------
 # 2. Sidebar Customization
@@ -53,8 +58,8 @@ st.markdown(
 # -------------------------------------------------------------------
 # 3. App Title & Inputs
 # -------------------------------------------------------------------
-st.title("✨ AI Story & Animation Studio")
-st.write("Enter a title, set your desired word limit, and generate a fully customized story and animated visual!")
+st.title("✨ AI Story & Video Studio")
+st.write("Enter a title, set your desired word limit, and generate a fully customized story and real AI video!")
 
 col_input, col_slider = st.columns([2, 1])
 
@@ -76,7 +81,7 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text using gemini-3.1-flash-lite."""
+    """Generates story text using Gemini API."""
     prompt = (
         f"Write an immersive, detailed, creative story strictly titled '{title}'. "
         f"The storyline must be deeply centered around this title. "
@@ -89,12 +94,31 @@ def generate_gemini_story(title: str, limit: int) -> str:
     return response.text
 
 
-def generate_pollinations_animation_url(title: str, story: str) -> str:
-    """Constructs a dynamic visual prompt URL using Pollinations AI."""
-    video_prompt = f"cinematic animation of {title}, vibrant colors, high detail, moving scene"
-    encoded_prompt = urllib.parse.quote(video_prompt)
-    animation_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true&seed=42"
-    return animation_url
+def generate_replicate_video(title: str, story: str) -> str:
+    """Generates a real MP4 video using Replicate AI API."""
+    # Create a descriptive video prompt based on the title and opening scene
+    video_prompt = f"Cinematic 3D animation video of {title}. High quality motion, vibrant colors, detailed scenery: {story[:150]}"
+    
+    # Run text-to-video generation on Replicate
+    # Uses Luma Ray (fast, high-quality video generator)
+    output = replicate.run(
+        "luma/ray",
+        input={
+            "prompt": video_prompt,
+            "aspect_ratio": "16:9"
+        }
+    )
+    
+    # Replicate returns a file stream or URL string to the generated MP4 file
+    return str(output)
+
+# -------------------------------------------------------------------
+# Session State to keep story text across re-runs
+# -------------------------------------------------------------------
+if "current_story" not in st.session_state:
+    st.session_state.current_story = ""
+if "last_title" not in st.session_state:
+    st.session_state.last_title = ""
 
 # -------------------------------------------------------------------
 # 4. Core Application Logic
@@ -102,38 +126,46 @@ def generate_pollinations_animation_url(title: str, story: str) -> str:
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
-    with st.spinner(f"Writing a ~{word_limit}-word story about '{story_title}'..."):
-        try:
-            story_text = generate_gemini_story(story_title, word_limit)
-            actual_word_count = len(story_text.split())
-            
-            st.markdown(f'<div class="story-card">{story_text}</div>', unsafe_allow_html=True)
-            st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target: {word_limit} words)")
+    # Generate story only if title changes or state is empty
+    if st.session_state.last_title != story_title:
+        with st.spinner(f"Writing a ~{word_limit}-word story about '{story_title}'..."):
+            try:
+                story_text = generate_gemini_story(story_title, word_limit)
+                st.session_state.current_story = story_text
+                st.session_state.last_title = story_title
+            except Exception as e:
+                if "429" in str(e):
+                    st.error("Free rate limit reached for Gemini. Please wait 15 seconds and try again.")
+                else:
+                    st.error(f"Error generating story: {e}")
 
-            # -------------------------------------------------------
-            # 5. Visual Animation Section
-            # -------------------------------------------------------
-            st.write("---")
-            st.write("### Do you like this story?")
-            
-            if st.button("👍 Yes, generate animation!"):
-                with st.spinner("Generating animation via Pollinations AI..."):
-                    animation_url = generate_pollinations_animation_url(story_title, story_text)
+    # Display generated story from state
+    if st.session_state.current_story:
+        story_text = st.session_state.current_story
+        actual_word_count = len(story_text.split())
+        
+        st.markdown(f'<div class="story-card">{story_text}</div>', unsafe_allow_html=True)
+        st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target: {word_limit} words)")
+
+        # -------------------------------------------------------
+        # 5. Real AI Video Generation Section
+        # -------------------------------------------------------
+        st.write("---")
+        st.write("### Do you like this story?")
+        
+        if st.button("🎬 Generate Real AI Video!"):
+            with st.spinner("Generating MP4 video via Replicate (this usually takes 1-2 minutes)..."):
+                try:
+                    video_url = generate_replicate_video(story_title, story_text)
                     
-                    st.write("### 🎬 Generated Scene Animation")
-                    st.image(
-                        animation_url, 
-                        caption=f"Animation generated for '{story_title}'", 
-                        use_container_width=True
-                    )
-                    st.success("Animation created successfully with zero rate limits!")
-
-        except Exception as e:
-            if "429" in str(e):
-                st.error("Free rate limit reached for Gemini text generation. Please wait 15 seconds and try again.")
-            else:
-                st.error(f"Error generating story: {e}")
+                    st.write("### 🎬 Generated AI Video")
+                    # Display the actual MP4 video file
+                    st.video(video_url)
+                    st.success("Video generated successfully!")
+                    
+                except Exception as vid_err:
+                    st.error(f"Error generating video via Replicate: {vid_err}")
 
 # Sidebar Info
 st.sidebar.write("---")
-st.sidebar.info("Ensure `streamlit` and `google-genai` are in your `requirements.txt` file!")
+st.sidebar.info("Ensure `streamlit`, `google-genai`, and `replicate` are in your `requirements.txt` file!")
