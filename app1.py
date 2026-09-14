@@ -80,7 +80,7 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text using Gemini 3.1 Pro."""
+    """Generates story text using Gemini API with automatic free-tier fallbacks."""
     if not client:
         raise ValueError("Gemini client is not initialized. Please check your API key setup.")
         
@@ -89,12 +89,23 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Target word count: strictly around {limit} words."
     )
     
-    # Target exact Gemini 3.1 endpoint string
-    response = client.models.generate_content(
-        model="gemini-3.1-pro-preview",
-        contents=prompt,
-    )
-    return response.text
+    # List of models ordered by preference; falls back to free-tier flash models
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            return response.text
+        except Exception as err:
+            # If rate limited (429) or model missing, try next model in fallback list
+            if "429" in str(err) or "NOT_FOUND" in str(err):
+                continue
+            raise err
+            
+    raise RuntimeError("All available free Gemini models hit quota limits. Please wait 1 minute and try again.")
 
 
 def get_free_photo_url(title: str) -> str:
@@ -136,7 +147,7 @@ if story_title:
     
     # Re-generate story only if title has changed
     if st.session_state.last_title != story_title:
-        with st.spinner("Writing story with Gemini 3.1 Pro..."):
+        with st.spinner("Writing story with Gemini AI..."):
             try:
                 story_text = generate_gemini_story(story_title, word_limit)
                 st.session_state.current_story = story_text
@@ -174,4 +185,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Tech Stack: Gemini 3.1 Pro + Pollinations AI + Pixabay Engine")
+st.sidebar.info("Free Tech Stack: Gemini 2.5 Flash + Pollinations AI + Pixabay Engine")
