@@ -1,14 +1,17 @@
 import streamlit as st
 import time
-import os
 from google import genai
 
 # 1. Page Configuration
 st.set_page_config(page_title="AI Story & Video Generator", page_icon="🎨", layout="wide")
 
-# Initialize Gemini Client
-# It automatically picks up GEMINI_API_KEY from environment variables or st.secrets
-client = genai.Client()
+# Initialize Gemini Client using Streamlit Secrets
+# Make sure GEMINI_API_KEY is set in Streamlit Cloud -> Settings -> Secrets
+if "GEMINI_API_KEY" in st.secrets:
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+else:
+    # Fallback to default environment lookup
+    client = genai.Client()
 
 # 2. Sidebar Customization (User-selected colors)
 st.sidebar.title("⚙️ Custom Styling")
@@ -85,8 +88,9 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Target word count: strictly around {limit} words. Do not make it brief or summarize—write out the full narrative."
     )
     
+    # Updated model string to gemini-1.5-flash (or gemini-2.0-flash)
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
         contents=prompt,
     )
     return response.text
@@ -126,7 +130,7 @@ if story_title:
                 )
 
         except Exception as e:
-            st.error(f"Error generating story: {e}. Check if your GEMINI_API_KEY is properly set.")
+            st.error(f"Error generating story: {e}")
 
 # Instructions for dependencies
 st.sidebar.write("---")
