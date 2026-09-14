@@ -1,3 +1,4 @@
+import tempfile
 import urllib.parse
 import requests
 import streamlit as st
@@ -12,14 +13,14 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Gemini Client
+# Initialize Gemini Client using Streamlit Secrets
 try:
     if "GEMINI_API_KEY" in st.secrets:
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     else:
         client = genai.Client()
 except Exception as e:
-    st.error(f"Error initializing Gemini Client: {e}")
+    st.error(f"Error initializing Gemini Client: {e}. Check your Secrets.")
 
 # -------------------------------------------------------------------
 # 2. Sidebar Customization
@@ -55,7 +56,7 @@ st.markdown(
 # 3. App Title & Inputs
 # -------------------------------------------------------------------
 st.title("✨ AI Story & Video Studio")
-st.write("Enter a title, set your desired word limit, and generate a fully customized story and visual video!")
+st.write("Enter a title, set your desired word limit, and generate a fully customized story and real AI motion video!")
 
 col_input, col_slider = st.columns([2, 1])
 
@@ -90,27 +91,19 @@ def generate_gemini_story(title: str, limit: int) -> str:
     return response.text
 
 
-def get_free_video(title: str) -> str:
-    """Fetches a free context-matching HD video stream URL via Pexels API."""
-    if "PEXELS_API_KEY" not in st.secrets:
-        # Default fallback sample video if key is missing
-        return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
-        
-    headers = {"Authorization": st.secrets["PEXELS_API_KEY"]}
-    query = urllib.parse.quote(title)
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
+def generate_free_ai_video(title: str) -> str:
+    """Generates a real 100% free AI MP4 Video using Pollinations Video Engine."""
+    clean_prompt = urllib.parse.quote(f"3D animation motion video of {title}, vibrant colors, highly detailed cinematic scene")
     
-    response = requests.get(url, headers=headers)
+    # Passing model=video directs Pollinations to output an MP4 stream instead of a static image
+    video_url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1280&height=720&model=video&nologo=true&seed=42"
+    
+    # Download video bytes to cache locally for smooth playback in Streamlit
+    response = requests.get(video_url)
     if response.status_code == 200:
-        data = response.json()
-        if data.get("videos"):
-            # Return high definition MP4 video link
-            video_files = data["videos"][0]["video_files"]
-            hd_video = next((f for f in video_files if f.get("quality") == "hd"), video_files[0])
-            return hd_video["link"]
-            
-    # Default video if no search result is returned
-    return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+        return response.content
+    else:
+        raise Exception(f"Video API returned status code {response.status_code}")
 
 # -------------------------------------------------------------------
 # Session State Setup
@@ -146,17 +139,23 @@ if story_title:
         st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target: {word_limit} words)")
 
         # -------------------------------------------------------
-        # 5. Free Video Section
+        # 5. Free Real Video Generation Section
         # -------------------------------------------------------
         st.write("---")
         st.write("### Do you like this story?")
         
-        if st.button("🎬 Fetch Free Video Scene!"):
-            with st.spinner("Retrieving HD video scene..."):
-                video_url = get_free_video(story_title)
-                st.write("### 🎬 Scene Video")
-                st.video(video_url)
-                st.success("Video loaded successfully with 100% free API access!")
+        if st.button("🎬 Generate Real AI Video!"):
+            with st.spinner("Rendering MP4 animation video (this takes about 20-30 seconds)..."):
+                try:
+                    video_bytes = generate_free_ai_video(story_title)
+                    
+                    st.write("### 🎬 Generated AI Video Scene")
+                    # Display using native Streamlit video element
+                    st.video(video_bytes, format="video/mp4")
+                    st.success("Video generated successfully with 100% free access!")
+                    
+                except Exception as vid_err:
+                    st.error(f"Error generating AI Video: {vid_err}")
 
 # Sidebar Info
 st.sidebar.write("---")
