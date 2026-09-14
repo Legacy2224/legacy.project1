@@ -1,12 +1,14 @@
 import streamlit as st
 import time
-from openai import OpenAI
+import os
+from google import genai
 
 # 1. Page Configuration
 st.set_page_config(page_title="AI Story & Video Generator", page_icon="🎨", layout="wide")
 
-# Initialize OpenAI Client (reads OPENAI_API_KEY from environment or st.secrets)
-client = OpenAI()
+# Initialize Gemini Client
+# It automatically picks up GEMINI_API_KEY from environment variables or st.secrets
+client = genai.Client()
 
 # 2. Sidebar Customization (User-selected colors)
 st.sidebar.title("⚙️ Custom Styling")
@@ -30,8 +32,8 @@ st.markdown(
         margin-bottom: 20px;
         line-height: 1.6;
         font-size: 16px;
+        color: {text_color};
     }}
-    /* Simple bouncing animation for video placeholder */
     @keyframes pulse {{
         0% {{ transform: scale(1); }}
         50% {{ transform: scale(1.03); }}
@@ -65,7 +67,7 @@ with col_input:
     story_title = st.text_input("Enter your Story Title:", placeholder="e.g., The Secret of the Neon Forest")
 
 with col_slider:
-    # 📏 Word Limit Feature (Scrollable slider + typed input)
+    # 📏 Word Limit Feature
     word_limit = st.slider(
         label="📏 Select Word Limit:",
         min_value=50,
@@ -75,24 +77,19 @@ with col_slider:
         help="Drag the slider or click the number box to type your word limit (50–1000 words)."
     )
 
-# Function to generate story using OpenAI API
-def generate_ai_story(title: str, limit: int) -> str:
+# Function to generate story using Gemini API
+def generate_gemini_story(title: str, limit: int) -> str:
     prompt = (
-        f"Write a creative, engaging, and detailed story strictly titled '{title}'. "
-        f"The story must be closely related to the title. "
-        f"Write approximately {limit} words. Do not make it significantly shorter than {limit} words."
+        f"Write an immersive, detailed, creative story strictly titled '{title}'. "
+        f"The storyline must be deeply centered around this title. "
+        f"Target word count: strictly around {limit} words. Do not make it brief or summarize—write out the full narrative."
     )
     
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a master storyteller who writes vivid stories adhering strictly to requested word limits."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-        max_tokens=2000
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
     )
-    return response.choices[0].message.content
+    return response.text
 
 # 5. Core Application Logic
 if story_title:
@@ -100,14 +97,14 @@ if story_title:
     
     with st.spinner(f"Writing a ~{word_limit}-word story about '{story_title}'..."):
         try:
-            story_text = generate_ai_story(story_title, word_limit)
+            story_text = generate_gemini_story(story_title, word_limit)
             
-            # Count actual generated words to show the user
+            # Count actual words generated
             actual_word_count = len(story_text.split())
             
-            # Display Story in styled card
+            # Display Story in card
             st.markdown(f'<div class="story-card">{story_text}</div>', unsafe_allow_html=True)
-            st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target was {word_limit} words)")
+            st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target: {word_limit} words)")
 
             # 6. User Feedback for Video Generation
             st.write("---")
@@ -129,8 +126,8 @@ if story_title:
                 )
 
         except Exception as e:
-            st.error(f"Error generating story: {e}. Please ensure your OPENAI_API_KEY is set properly.")
+            st.error(f"Error generating story: {e}. Check if your GEMINI_API_KEY is properly set.")
 
 # Instructions for dependencies
 st.sidebar.write("---")
-st.sidebar.info("Don't forget to add `streamlit` and `openai` to your `requirements.txt` file!")
+st.sidebar.info("Dependencies needed in `requirements.txt`:\n- `streamlit`\n- `google-genai`")
