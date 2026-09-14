@@ -1,11 +1,18 @@
 import tempfile
-import streamlit as st
 import time
+import requests
+import streamlit as st
+import replicate
 from google import genai
-from google.genai import types
 
+# -------------------------------------------------------------------
 # 1. Page Configuration
-st.set_page_config(page_title="AI Story & Video Generator", page_icon="🎨", layout="wide")
+# -------------------------------------------------------------------
+st.set_page_config(
+    page_title="AI Story & Video Generator", 
+    page_icon="🎨", 
+    layout="wide"
+)
 
 # Initialize Gemini Client using Streamlit Secrets
 try:
@@ -14,14 +21,17 @@ try:
     else:
         client = genai.Client()
 except Exception as e:
-    st.error(f"Error initializing Gemini Client: {e}. Please check your Secrets configuration.")
+    st.error(f"Error initializing Gemini Client: {e}. Check your Streamlit Secrets.")
 
-# 2. Sidebar Customization
+# -------------------------------------------------------------------
+# 2. Sidebar Customization (User-selected colors)
+# -------------------------------------------------------------------
 st.sidebar.title("⚙️ Custom Styling")
 bg_color = st.sidebar.color_picker("Pick App Background Color", "#F0F2F6")
 text_color = st.sidebar.color_picker("Pick Text Color", "#1F1F1F")
 card_color = st.sidebar.color_picker("Pick Card Background Color", "#FFFFFF")
 
+# Apply custom styling dynamically with CSS
 st.markdown(
     f"""
     <style>
@@ -44,11 +54,15 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# 3. App Title
+# -------------------------------------------------------------------
+# 3. App Title & Subtitle
+# -------------------------------------------------------------------
 st.title("✨ AI Story & Animation Studio")
-st.write("Enter a title, set your desired word limit, and generate a fully customized story!")
+st.write("Enter a title, set your desired word limit, and generate a fully customized story and animation!")
 
+# -------------------------------------------------------------------
 # 4. User Inputs
+# -------------------------------------------------------------------
 col_input, col_slider = st.columns([2, 1])
 
 with col_input:
@@ -61,74 +75,91 @@ with col_slider:
         max_value=1000,
         value=300,
         step=25,
-        help="Drag the slider or type your target word limit."
+        help="Drag the slider or click the number box to type your word limit (50–1000 words)."
     )
 
+# -------------------------------------------------------------------
+# Helper Functions
+# -------------------------------------------------------------------
+
 def generate_gemini_story(title: str, limit: int) -> str:
+    """Generates a story using gemini-3.1-flash-lite (high free-tier limits)."""
     prompt = (
         f"Write an immersive, detailed, creative story strictly titled '{title}'. "
         f"The storyline must be deeply centered around this title. "
         f"Target word count: strictly around {limit} words. Do not make it brief or summarize—write out the full narrative."
     )
+    
+    # Using gemini-3.1-flash-lite to prevent 429 Resource Exhausted errors
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.1-flash-lite",
         contents=prompt,
     )
     return response.text
 
-# Function to generate animation video using Veo model
-def generate_story_animation(title: str, story: str):
-    video_prompt = f"Cinematic, high-quality 3D animation visual depicting the main theme of the story '{title}': {story[:300]}"
+
+def generate_free_animation(title: str, story: str) -> str:
+    """Generates a free video using Replicate's zero-scope video model."""
+    video_prompt = f"Cinematic 3D animation visual based on '{title}': {story[:200]}"
     
-    # Trigger long-running video generation request
-    operation = client.models.generate_videos(
-        model="veo-3.1-fast-generate-preview",
-        prompt=video_prompt,
-        config=types.GenerateVideosConfig(
-            aspect_ratio="16:9",
-            duration_seconds=6,
-        )
+    # Run open-source video generation via Replicate API
+    output = replicate.run(
+        "anotherjesse/zeroscope-v2-xl:9f747673945c62801b13b84701c783929c0eed26e52c2e145bab317e07b3d7a9",
+        input={"prompt": video_prompt}
     )
     
-    # Poll operation status until video processing is completed
-    while not operation.done:
-        time.sleep(10)
-        operation = client.operations.get_videos_operation(operation)
-        
-    return operation.response.generated_videos[0].video
+    # Replicate returns a URL to the MP4 file
+    if isinstance(output, list) and len(output) > 0:
+        return output[0]
+    return output
 
+# -------------------------------------------------------------------
 # 5. Core Application Logic
+# -------------------------------------------------------------------
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
     with st.spinner(f"Writing a ~{word_limit}-word story about '{story_title}'..."):
         try:
             story_text = generate_gemini_story(story_title, word_limit)
+            
+            # Count actual words generated
             actual_word_count = len(story_text.split())
             
+            # Display Story in card
             st.markdown(f'<div class="story-card">{story_text}</div>', unsafe_allow_html=True)
             st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target: {word_limit} words)")
 
-            # 6. Animation Generation Section
+            # -------------------------------------------------------
+            # 6. Video Generation
+            # -------------------------------------------------------
             st.write("---")
             st.write("### Do you like this story?")
             
             if st.button("👍 Yes, generate animation!"):
-                st.info("Story approved! Video generation takes around 1-2 minutes. Please wait...")
-                with st.spinner("Generating animation with Veo model..."):
-                    video_result = generate_story_animation(story_title, story_text)
+                st.info("Story approved! Generating video via Replicate (takes ~30-60 seconds)...")
+                
+                with st.spinner("Rendering animation..."):
+                    try:
+                        video_url = generate_free_animation(story_title, story_text)
+                        
+                        st.write("### 🎬 Generated Animation")
+                        # Display video directly from the URL
+                        st.video(video_url)
+                        st.success("Animation generated successfully!")
                     
-                    # Save video to temporary file for Streamlit output
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-                        tmp_file.write(video_result.video_bytes)
-                        tmp_path = tmp_file.name
-
-                st.write("### 🎬 Generated Animation")
-                st.video(tmp_path)
+                    except Exception as vid_err:
+                        st.error(
+                            f"Error generating video: {vid_err}\n\n"
+                            "Make sure `REPLICATE_API_TOKEN` is added to your Streamlit secrets."
+                        )
 
         except Exception as e:
-            st.error(f"Error processing request: {e}")
+            if "429" in str(e):
+                st.error("Free rate limit reached for Gemini. Please wait 30 seconds and try clicking generate again.")
+            else:
+                st.error(f"Error generating story: {e}")
 
 # Sidebar Info
 st.sidebar.write("---")
-st.sidebar.info("Ensure `streamlit` and `google-genai` are in your `requirements.txt` file!")
+st.sidebar.info("Ensure `streamlit`, `google-genai`, and `replicate` are in your `requirements.txt` file!")
