@@ -71,7 +71,7 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Target word count: strictly around {limit} words. Do not make it brief or summarize—write out the full narrative."
     )
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-2.5-flash",
         contents=prompt,
     )
     return response.text
