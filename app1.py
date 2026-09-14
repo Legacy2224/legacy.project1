@@ -12,14 +12,15 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Gemini Client
+# Initialize Gemini Client safely
+client = None
 try:
     if "GEMINI_API_KEY" in st.secrets:
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     else:
         client = genai.Client()
 except Exception as e:
-    st.error(f"Error initializing Gemini: {e}. Ensure GEMINI_API_KEY is configured.")
+    st.error(f"Error initializing Gemini: {e}. Ensure GEMINI_API_KEY is configured in .streamlit/secrets.toml")
 
 # -------------------------------------------------------------------
 # 2. UI Styling
@@ -60,7 +61,10 @@ st.write("Generate stories with **AI Artwork Photos** and **Motion Videos** with
 col_input, col_slider = st.columns([2, 1])
 
 with col_input:
-    story_title = st.text_input("Enter your Story Title:", placeholder="e.g., A cybernetic owl flying through a neon forest")
+    story_title = st.text_input(
+        "Enter your Story Title:", 
+        placeholder="e.g., A cybernetic owl flying through a neon forest"
+    )
 
 with col_slider:
     word_limit = st.slider(
@@ -76,26 +80,31 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text using Gemini API."""
+    """Generates story text using Gemini 3.1 Pro."""
+    if not client:
+        raise ValueError("Gemini client is not initialized. Please check your API key setup.")
+        
     prompt = (
         f"Write an immersive story strictly titled '{title}'. "
         f"Target word count: strictly around {limit} words."
     )
+    
+    # Target exact Gemini 3.1 endpoint string
     response = client.models.generate_content(
-        model="gemini-3.1-flash",
+        model="gemini-3.1-pro-preview",
         contents=prompt,
     )
     return response.text
 
 
 def get_free_photo_url(title: str) -> str:
-    """Generates free dynamic AI photo artwork via Pollinations AI (No API Key)."""
+    """Generates free dynamic AI photo artwork via Pollinations AI (No API Key needed)."""
     encoded_prompt = urllib.parse.quote(f"3D cinematic photo of {title}, highly detailed, 8k resolution")
     return f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true&seed=42"
 
 
 def get_free_pixabay_video_url(title: str) -> str:
-    """Attempts Pixabay API search for stock videos, falls back to dynamic render or sample."""
+    """Attempts Pixabay API search for stock videos, falls back to a default sample video on error."""
     if "PIXABAY_API_KEY" in st.secrets:
         api_key = st.secrets["PIXABAY_API_KEY"]
         query_url = f"https://pixabay.com/api/videos/?key={api_key}&q={urllib.parse.quote(title)}&video_type=film&per_page=3"
@@ -104,16 +113,15 @@ def get_free_pixabay_video_url(title: str) -> str:
             if res.status_code == 200:
                 hits = res.json().get("hits", [])
                 if hits:
-                    # Select high definition mp4 stream
                     return hits[0]["videos"]["large"]["url"]
         except Exception:
             pass
 
-    # Standard public video clip fallback (Reliable MP4 baseline)
+    # Standard public video clip baseline fallback
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
 # -------------------------------------------------------------------
-# Session State
+# Session State Management
 # -------------------------------------------------------------------
 if "current_story" not in st.session_state:
     st.session_state.current_story = ""
@@ -126,9 +134,9 @@ if "last_title" not in st.session_state:
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
-    # Generate story only if title changes
+    # Re-generate story only if title has changed
     if st.session_state.last_title != story_title:
-        with st.spinner("Writing story with Gemini..."):
+        with st.spinner("Writing story with Gemini 3.1 Pro..."):
             try:
                 story_text = generate_gemini_story(story_title, word_limit)
                 st.session_state.current_story = story_text
@@ -136,7 +144,7 @@ if story_title:
             except Exception as e:
                 st.error(f"Error generating story: {e}")
 
-    # Display Story Card
+    # Display Story Content
     if st.session_state.current_story:
         story_text = st.session_state.current_story
         actual_words = len(story_text.split())
@@ -157,13 +165,13 @@ if story_title:
                     st.image(photo_url, caption=f"Generated Photo: {story_title}", use_container_width=True)
                     st.success("Photo rendered successfully!")
 
-        # Action 2: Load Video
+        # Action 2: Render Video
         with btn_col2:
             if st.button("🎥 Generate & Play Scene Video"):
                 with st.spinner("Loading video stream..."):
                     video_url = get_free_pixabay_video_url(story_title)
                     st.video(video_url)
-                    st.success("Video generated successfully!")
+                    st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Free Stack: Gemini 2.5 Flash + Pollinations AI + Pixabay Engine")
+st.sidebar.info("Tech Stack: Gemini 3.1 Pro + Pollinations AI + Pixabay Engine")
