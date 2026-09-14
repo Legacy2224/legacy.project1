@@ -1,3 +1,4 @@
+import time
 import urllib.parse
 import requests
 import streamlit as st
@@ -90,19 +91,34 @@ def generate_gemini_story(title: str, limit: int) -> str:
     return response.text
 
 
-def generate_free_pollinations_video(title: str) -> bytes:
+def generate_free_pollinations_video(title: str, max_retries: int = 3) -> bytes:
     """
-    Generates a 100% free AI MP4 motion video via Pollinations AI.
-    Forces MP4 animation output via `model=video`.
+    Generates a free AI MP4 motion video via Pollinations AI.
+    Includes auto-retry logic for 429 rate limits and a fallback stream.
     """
     video_prompt = urllib.parse.quote(f"3D cinematic animation video of {title}, vibrant colors, moving scene, detailed motion")
     video_url = f"https://image.pollinations.ai/prompt/{video_prompt}?width=1280&height=720&model=video&nologo=true&seed=42"
     
-    response = requests.get(video_url)
-    if response.status_code == 200:
-        return response.content
-    else:
-        raise Exception(f"Video generation endpoint returned status code {response.status_code}")
+    # Attempt request with retry logic for 429 rate limits
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(video_url, timeout=35)
+            
+            if response.status_code == 200:
+                return response.content
+            elif response.status_code == 429:
+                wait_time = (attempt + 1) * 5
+                st.warning(f"Server is busy (Rate Limit 429). Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                break
+        except Exception:
+            time.sleep(3)
+
+    # Reliable fallback MP4 video scene if Pollinations free GPUs are completely saturated
+    st.info("ℹ️ Free AI video generator is currently at peak capacity. Loading fallback motion video...")
+    fallback_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+    return requests.get(fallback_url).content
 
 # -------------------------------------------------------------------
 # Session State Setup
@@ -118,6 +134,7 @@ if "last_title" not in st.session_state:
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
+    # Generate story only if the user types a new title
     if st.session_state.last_title != story_title:
         with st.spinner(f"Writing a ~{word_limit}-word story about '{story_title}'..."):
             try:
@@ -130,6 +147,7 @@ if story_title:
                 else:
                     st.error(f"Error generating story: {e}")
 
+    # Display saved story from state so it doesn't disappear on button clicks
     if st.session_state.current_story:
         story_text = st.session_state.current_story
         actual_word_count = len(story_text.split())
@@ -144,14 +162,14 @@ if story_title:
         st.write("### Do you like this story?")
         
         if st.button("🎬 Generate Real AI Video!"):
-            with st.spinner("Rendering AI video clip (takes ~15-20 seconds)..."):
+            with st.spinner("Rendering AI video clip (takes ~15-30 seconds)..."):
                 try:
                     video_bytes = generate_free_pollinations_video(story_title)
-                    st.write("### 🎬 Generated AI Video Scene")
+                    st.write("### 🎬 Generated Scene Video")
                     st.video(video_bytes, format="video/mp4")
-                    st.success("AI video generated successfully with zero API cost!")
+                    st.success("Video loaded successfully with zero API costs!")
                 except Exception as vid_err:
-                    st.error(f"Error generating video: {vid_err}")
+                    st.error(f"Error loading video stream: {vid_err}")
 
 # Sidebar Info
 st.sidebar.write("---")
