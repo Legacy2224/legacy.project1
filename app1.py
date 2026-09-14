@@ -1,6 +1,6 @@
-import time
+import urllib.parse
+import requests
 import streamlit as st
-import replicate
 from google import genai
 
 # -------------------------------------------------------------------
@@ -12,18 +12,14 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Gemini Client using Streamlit Secrets
+# Initialize Gemini Client
 try:
     if "GEMINI_API_KEY" in st.secrets:
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     else:
         client = genai.Client()
 except Exception as e:
-    st.error(f"Error initializing Gemini Client: {e}. Check your Secrets configuration.")
-
-# Check for Replicate Token
-if "REPLICATE_API_TOKEN" not in st.secrets:
-    st.warning("⚠️ `REPLICATE_API_TOKEN` missing in Streamlit Secrets. Video generation will fail without it.")
+    st.error(f"Error initializing Gemini Client: {e}")
 
 # -------------------------------------------------------------------
 # 2. Sidebar Customization
@@ -59,7 +55,7 @@ st.markdown(
 # 3. App Title & Inputs
 # -------------------------------------------------------------------
 st.title("✨ AI Story & Video Studio")
-st.write("Enter a title, set your desired word limit, and generate a fully customized story and real AI video!")
+st.write("Enter a title, set your desired word limit, and generate a fully customized story and visual video!")
 
 col_input, col_slider = st.columns([2, 1])
 
@@ -94,26 +90,30 @@ def generate_gemini_story(title: str, limit: int) -> str:
     return response.text
 
 
-def generate_replicate_video(title: str, story: str) -> str:
-    """Generates a real MP4 video using Replicate AI API."""
-    # Create a descriptive video prompt based on the title and opening scene
-    video_prompt = f"Cinematic 3D animation video of {title}. High quality motion, vibrant colors, detailed scenery: {story[:150]}"
+def get_free_video(title: str) -> str:
+    """Fetches a free context-matching HD video stream URL via Pexels API."""
+    if "PEXELS_API_KEY" not in st.secrets:
+        # Default fallback sample video if key is missing
+        return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        
+    headers = {"Authorization": st.secrets["PEXELS_API_KEY"]}
+    query = urllib.parse.quote(title)
+    url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
     
-    # Run text-to-video generation on Replicate
-    # Uses Luma Ray (fast, high-quality video generator)
-    output = replicate.run(
-        "luma/ray",
-        input={
-            "prompt": video_prompt,
-            "aspect_ratio": "16:9"
-        }
-    )
-    
-    # Replicate returns a file stream or URL string to the generated MP4 file
-    return str(output)
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        if data.get("videos"):
+            # Return high definition MP4 video link
+            video_files = data["videos"][0]["video_files"]
+            hd_video = next((f for f in video_files if f.get("quality") == "hd"), video_files[0])
+            return hd_video["link"]
+            
+    # Default video if no search result is returned
+    return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
 # -------------------------------------------------------------------
-# Session State to keep story text across re-runs
+# Session State Setup
 # -------------------------------------------------------------------
 if "current_story" not in st.session_state:
     st.session_state.current_story = ""
@@ -126,7 +126,6 @@ if "last_title" not in st.session_state:
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
-    # Generate story only if title changes or state is empty
     if st.session_state.last_title != story_title:
         with st.spinner(f"Writing a ~{word_limit}-word story about '{story_title}'..."):
             try:
@@ -139,7 +138,6 @@ if story_title:
                 else:
                     st.error(f"Error generating story: {e}")
 
-    # Display generated story from state
     if st.session_state.current_story:
         story_text = st.session_state.current_story
         actual_word_count = len(story_text.split())
@@ -148,24 +146,18 @@ if story_title:
         st.caption(f"📊 **Generated Word Count:** {actual_word_count} words (Target: {word_limit} words)")
 
         # -------------------------------------------------------
-        # 5. Real AI Video Generation Section
+        # 5. Free Video Section
         # -------------------------------------------------------
         st.write("---")
         st.write("### Do you like this story?")
         
-        if st.button("🎬 Generate Real AI Video!"):
-            with st.spinner("Generating MP4 video via Replicate (this usually takes 1-2 minutes)..."):
-                try:
-                    video_url = generate_replicate_video(story_title, story_text)
-                    
-                    st.write("### 🎬 Generated AI Video")
-                    # Display the actual MP4 video file
-                    st.video(video_url)
-                    st.success("Video generated successfully!")
-                    
-                except Exception as vid_err:
-                    st.error(f"Error generating video via Replicate: {vid_err}")
+        if st.button("🎬 Fetch Free Video Scene!"):
+            with st.spinner("Retrieving HD video scene..."):
+                video_url = get_free_video(story_title)
+                st.write("### 🎬 Scene Video")
+                st.video(video_url)
+                st.success("Video loaded successfully with 100% free API access!")
 
 # Sidebar Info
 st.sidebar.write("---")
-st.sidebar.info("Ensure `streamlit`, `google-genai`, and `replicate` are in your `requirements.txt` file!")
+st.sidebar.info("Ensure `streamlit`, `requests`, and `google-genai` are in your `requirements.txt` file!")
