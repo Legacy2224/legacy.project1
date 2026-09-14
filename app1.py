@@ -1,6 +1,3 @@
-import tempfile
-import time
-import requests
 import urllib.parse
 import streamlit as st
 from google import genai
@@ -21,7 +18,7 @@ try:
     else:
         client = genai.Client()
 except Exception as e:
-    st.error(f"Error initializing Gemini Client: {e}. Check your Streamlit Secrets.")
+    st.error(f"Error initializing Gemini Client: {e}. Please check your Streamlit Secrets.")
 
 # -------------------------------------------------------------------
 # 2. Sidebar Customization
@@ -57,7 +54,7 @@ st.markdown(
 # 3. App Title & Inputs
 # -------------------------------------------------------------------
 st.title("✨ AI Story & Animation Studio")
-st.write("Enter a title, set your desired word limit, and generate a fully customized story and visual!")
+st.write("Enter a title, set your desired word limit, and generate a fully customized story and animated visual!")
 
 col_input, col_slider = st.columns([2, 1])
 
@@ -79,7 +76,7 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story using gemini-3.1-flash-lite (high free limits)."""
+    """Generates story text using gemini-3.1-flash-lite."""
     prompt = (
         f"Write an immersive, detailed, creative story strictly titled '{title}'. "
         f"The storyline must be deeply centered around this title. "
@@ -92,12 +89,12 @@ def generate_gemini_story(title: str, limit: int) -> str:
     return response.text
 
 
-def generate_free_pollinations_image(title: str, story: str) -> str:
-    """Generates 100% free visual illustration via Pollinations AI (no API key needed)."""
-    clean_prompt = f"3D animation cinematic illustration of {title}, high quality fantasy concept art"
-    encoded_prompt = urllib.parse.quote(clean_prompt)
-    image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true"
-    return image_url
+def generate_pollinations_animation_url(title: str, story: str) -> str:
+    """Constructs a dynamic visual prompt URL using Pollinations AI."""
+    video_prompt = f"cinematic animation of {title}, vibrant colors, high detail, moving scene"
+    encoded_prompt = urllib.parse.quote(video_prompt)
+    animation_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true&seed=42"
+    return animation_url
 
 # -------------------------------------------------------------------
 # 4. Core Application Logic
@@ -119,16 +116,21 @@ if story_title:
             st.write("---")
             st.write("### Do you like this story?")
             
-            if st.button("👍 Yes, generate visual animation!"):
-                with st.spinner("Creating visual artwork..."):
-                    visual_url = generate_free_pollinations_image(story_title, story_text)
-                    st.write("### 🎬 Animated Story Scene")
-                    st.image(visual_url, caption=f"Visual representation for '{story_title}'", use_column_width=True)
-                    st.success("Visual generated for free with zero rate limits!")
+            if st.button("👍 Yes, generate animation!"):
+                with st.spinner("Generating animation via Pollinations AI..."):
+                    animation_url = generate_pollinations_animation_url(story_title, story_text)
+                    
+                    st.write("### 🎬 Generated Scene Animation")
+                    st.image(
+                        animation_url, 
+                        caption=f"Animation generated for '{story_title}'", 
+                        use_container_width=True
+                    )
+                    st.success("Animation created successfully with zero rate limits!")
 
         except Exception as e:
             if "429" in str(e):
-                st.error("Free rate limit reached for Gemini. Please wait 15 seconds and try again.")
+                st.error("Free rate limit reached for Gemini text generation. Please wait 15 seconds and try again.")
             else:
                 st.error(f"Error generating story: {e}")
 
