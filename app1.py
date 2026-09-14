@@ -1,3 +1,4 @@
+import time
 import urllib.parse
 import requests
 import streamlit as st
@@ -15,15 +16,15 @@ st.set_page_config(
 # Initialize Gemini Client safely
 client = None
 try:
-    if "GEMINI_API_KEY" in st.secrets:
+    if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     else:
         client = genai.Client()
 except Exception as e:
-    st.error(f"Error initializing Gemini: {e}. Ensure GEMINI_API_KEY is configured in .streamlit/secrets.toml")
+    st.sidebar.warning("Gemini Client initialization warning. Ensure GEMINI_API_KEY is configured.")
 
 # -------------------------------------------------------------------
-# 2. UI Styling
+# 2. Custom UI Styling
 # -------------------------------------------------------------------
 st.sidebar.title("⚙️ Custom Styling")
 bg_color = st.sidebar.color_picker("App Background Color", "#F0F2F6")
@@ -79,33 +80,67 @@ with col_slider:
 # Helper Functions
 # -------------------------------------------------------------------
 
+def generate_story_with_groq_fallback(title: str, limit: int) -> str:
+    """Attempts Groq API if configured, providing an instant alternative if Gemini is out of quota."""
+    if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {st.secrets['GROQ_API_KEY']}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{
+                    "role": "user", 
+                    "content": f"Write an immersive story strictly titled '{title}'. Target word count: around {limit} words."
+                }],
+                "temperature": 0.7
+            }
+            res = requests.post(url, json=payload, headers=headers, timeout=10)
+            if res.status_code == 200:
+                return res.json()["choices"][0]["message"]["content"]
+        except Exception:
+            pass
+    return None
+
+
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text using Gemini API with automatic free-tier fallbacks."""
-    if not client:
-        raise ValueError("Gemini client is not initialized. Please check your API key setup.")
-        
+    """Generates story text with robust error handling and model switching."""
     prompt = (
         f"Write an immersive story strictly titled '{title}'. "
         f"Target word count: strictly around {limit} words."
     )
     
-    # List of models ordered by preference; falls back to free-tier flash models
+    # Standard models available on free tier
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
     
-    for model_name in models_to_try:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-            )
-            return response.text
-        except Exception as err:
-            # If rate limited (429) or model missing, try next model in fallback list
-            if "429" in str(err) or "NOT_FOUND" in str(err):
-                continue
-            raise err
-            
-    raise RuntimeError("All available free Gemini models hit quota limits. Please wait 1 minute and try again.")
+    if client:
+        for model_name in models_to_try:
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                    )
+                    return response.text
+                except Exception as err:
+                    err_str = str(err)
+                    if "429" in err_str:
+                        time.sleep(2)  # Short retry delay for rate limits
+                        continue
+                    elif "404" in err_str or "NOT_FOUND" in err_str:
+                        break  # Switch to next model if model name fails
+
+    # Fallback to Groq API if Gemini fails or is quota-exhausted
+    groq_story = generate_story_with_groq_fallback(title, limit)
+    if groq_story:
+        return groq_story
+
+    raise RuntimeError(
+        "All Gemini API models hit rate limits or quota caps. "
+        "Wait 1 minute, or add a free GROQ_API_KEY to your secrets.toml as a backup!"
+    )
 
 
 def get_free_photo_url(title: str) -> str:
@@ -116,7 +151,7 @@ def get_free_photo_url(title: str) -> str:
 
 def get_free_pixabay_video_url(title: str) -> str:
     """Attempts Pixabay API search for stock videos, falls back to a default sample video on error."""
-    if "PIXABAY_API_KEY" in st.secrets:
+    if "PIXABAY_API_KEY" in st.secrets and st.secrets["PIXABAY_API_KEY"]:
         api_key = st.secrets["PIXABAY_API_KEY"]
         query_url = f"https://pixabay.com/api/videos/?key={api_key}&q={urllib.parse.quote(title)}&video_type=film&per_page=3"
         try:
@@ -128,7 +163,7 @@ def get_free_pixabay_video_url(title: str) -> str:
         except Exception:
             pass
 
-    # Standard public video clip baseline fallback
+    # Standard public sample video clip baseline fallback
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
 # -------------------------------------------------------------------
@@ -147,7 +182,7 @@ if story_title:
     
     # Re-generate story only if title has changed
     if st.session_state.last_title != story_title:
-        with st.spinner("Writing story with Gemini AI..."):
+        with st.spinner("Writing story..."):
             try:
                 story_text = generate_gemini_story(story_title, word_limit)
                 st.session_state.current_story = story_text
