@@ -115,20 +115,45 @@ def generate_story_with_groq_fallback(title: str, limit: int) -> str:
     return None
 
 
+def generate_story_with_huggingface(title: str, limit: int) -> str:
+    """Free public fallback using Hugging Face router when Groq/Gemini fail."""
+    url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    payload = {
+        "model": "Qwen/Qwen2.5-72B-Instruct",
+        "messages": [{
+            "role": "user", 
+            "content": f"Write an immersive story strictly titled '{title}'. Target word count: around {limit} words."
+        }],
+        "max_tokens": 1000
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=12)
+        if res.status_code == 200:
+            return res.json()["choices"][0]["message"]["content"]
+    except Exception:
+        pass
+    return None
+
+
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text with active Groq model primary and Gemini secondary."""
+    """Generates story text with fallback model handling: Groq -> Gemini (Flash & Lite) -> Hugging Face."""
     prompt = (
         f"Write an immersive story strictly titled '{title}'. "
         f"Target word count: strictly around {limit} words."
     )
     
-    # 1. Attempt Groq first using active models
+    # 1. Attempt Groq first to bypass Gemini quota limits
     groq_story = generate_story_with_groq_fallback(title, limit)
     if groq_story:
         return groq_story
 
-    # 2. Fallback to Gemini Flash models
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    # 2. Fallback to Gemini with Flash-Lite backup models
+    models_to_try = [
+        "gemini-2.5-flash", 
+        "gemini-2.5-flash-lite", 
+        "gemini-2.0-flash", 
+        "gemini-2.0-flash-lite"
+    ]
     
     if client:
         for model_name in models_to_try:
@@ -142,13 +167,18 @@ def generate_gemini_story(title: str, limit: int) -> str:
                 except Exception as err:
                     err_str = str(err)
                     if "429" in err_str:
-                        time.sleep(2)
+                        time.sleep(1.5)
                         continue
                     elif "404" in err_str or "NOT_FOUND" in err_str:
                         break
 
+    # 3. Public Hugging Face Fallback (No API key required)
+    hf_story = generate_story_with_huggingface(title, limit)
+    if hf_story:
+        return hf_story
+
     raise RuntimeError(
-        "Story generation failed on both APIs. Please wait 1 minute for your free Gemini quota to reset!"
+        "All story generation services are currently busy or rate-limited. Please wait 30 seconds and try again!"
     )
 
 
@@ -229,4 +259,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Free Tech Stack: Groq (Llama 3.1) / Gemini 2.5 Flash + Pollinations AI + Pixabay Engine")
+st.sidebar.info("Free Tech Stack: Groq / Gemini 2.5 Flash & Lite / HF Router + Pollinations AI + Pixabay Engine")
