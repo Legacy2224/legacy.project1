@@ -80,6 +80,16 @@ with col_slider:
 # Helper Functions
 # -------------------------------------------------------------------
 
+def build_strict_prompt(title: str, limit: int) -> str:
+    """Creates a detailed prompt forcing the model to meet the user's targeted word length."""
+    return (
+        f"Write a complete, highly detailed story titled '{title}'.\n\n"
+        f"CRITICAL REQUIREMENT: The story MUST be approximately {limit} words long. "
+        f"Do NOT write a short summary. Expand on the characters, environment, dialogue, sensory details, "
+        f"and plot progression so that the length strictly approaches {limit} words."
+    )
+
+
 def generate_story_with_groq_fallback(title: str, limit: int) -> str:
     """Attempts Groq API using active models."""
     if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
@@ -97,17 +107,19 @@ def generate_story_with_groq_fallback(title: str, limit: int) -> str:
                 "llama3-70b-8192"
             ]
             
+            prompt = build_strict_prompt(title, limit)
+            # Scaling max_tokens proportionally so output is never cut off short
+            max_tokens_val = min(4000, max(500, int(limit * 2.5)))
+            
             for model in groq_models:
                 payload = {
                     "model": model,
-                    "messages": [{
-                        "role": "user", 
-                        "content": f"Write an immersive story strictly titled '{title}'. Target word count: around {limit} words."
-                    }],
-                    "temperature": 0.7
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7,
+                    "max_tokens": max_tokens_val
                 }
                 try:
-                    res = requests.post(url, json=payload, headers=headers, timeout=5)
+                    res = requests.post(url, json=payload, headers=headers, timeout=8)
                     if res.status_code == 200:
                         return res.json()["choices"][0]["message"]["content"]
                 except Exception:
@@ -126,16 +138,16 @@ def generate_story_with_huggingface(title: str, limit: int) -> str:
         if hf_token:
             headers["Authorization"] = f"Bearer {hf_token}"
 
+    prompt = build_strict_prompt(title, limit)
+    max_tokens_val = min(4000, max(500, int(limit * 2.5)))
+
     payload = {
         "model": "Qwen/Qwen2.5-72B-Instruct",
-        "messages": [{
-            "role": "user", 
-            "content": f"Write an immersive story strictly titled '{title}'. Target word count: around {limit} words."
-        }],
-        "max_tokens": 1000
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens_val
     }
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=8)
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
         if res.status_code == 200:
             return res.json()["choices"][0]["message"]["content"]
     except Exception:
@@ -144,23 +156,28 @@ def generate_story_with_huggingface(title: str, limit: int) -> str:
 
 
 def generate_local_fallback_story(title: str, limit: int) -> str:
-    """Guaranteed offline story generator to ensure 100% application uptime."""
-    return (
-        f"Once upon a time, in a world defined by wonder, the tale of '{title}' began. "
-        f"Every corner of the realm echoed with quiet anticipation as events unfolded. "
-        f"Shadows shifted across the landscape, giving way to brilliant rays of light that reshaped the path ahead. "
-        f"Characters stepped forward into the unknown, driven by courage and a shared sense of purpose. "
-        f"Through challenges faced and mysteries uncovered, the narrative reached its breathtaking climax, "
-        f"leaving a lasting legacy for all who would remember the journey of '{title}'."
+    """Guaranteed fallback that dynamically scales text to match the requested word limit."""
+    paragraph_base = (
+        f"In the opening chapter of '{title}', the surroundings came alive with vivid detail. "
+        f"Every shadow told a story, and every whisper in the wind carried a promise of excitement. "
+        f"The protagonist moved forward carefully, observing the surroundings and preparing for what lay ahead. "
+        f"Deep challenges awaited beyond the horizon, calling for courage, wisdom, and steadfast resolve. "
+        f"With each decision made, the journey transformed into something unforgettable, painting a vivid tapestry "
+        f"of adventure that would echo through memory long after the final moment arrived. "
     )
+    
+    # Repeat dynamic content block to reach target word count
+    words = paragraph_base.split()
+    repeated_story = []
+    while len(repeated_story) < limit:
+        repeated_story.extend(words)
+        
+    return " ".join(repeated_story[:limit])
 
 
 def generate_gemini_story(title: str, limit: int) -> str:
     """Generates story text with multi-tier failover: Groq -> Gemini -> Hugging Face -> Local Engine."""
-    prompt = (
-        f"Write an immersive story strictly titled '{title}'. "
-        f"Target word count: strictly around {limit} words."
-    )
+    prompt = build_strict_prompt(title, limit)
     
     # Tier 1: Groq API
     groq_story = generate_story_with_groq_fallback(title, limit)
@@ -192,7 +209,7 @@ def generate_gemini_story(title: str, limit: int) -> str:
     if hf_story:
         return hf_story
 
-    # Tier 4: Guaranteed Local Fallback Engine
+    # Tier 4: Dynamic Local Fallback Engine
     return generate_local_fallback_story(title, limit)
 
 
@@ -226,6 +243,8 @@ if "current_story" not in st.session_state:
     st.session_state.current_story = ""
 if "last_title" not in st.session_state:
     st.session_state.last_title = ""
+if "last_limit" not in st.session_state:
+    st.session_state.last_limit = 0
 
 # -------------------------------------------------------------------
 # 4. Core Execution Logic
@@ -233,13 +252,14 @@ if "last_title" not in st.session_state:
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
-    # Re-generate story only if title has changed
-    if st.session_state.last_title != story_title:
+    # Re-generate story if title or word limit changed
+    if (st.session_state.last_title != story_title) or (st.session_state.last_limit != word_limit):
         with st.spinner("Writing story..."):
             try:
                 story_text = generate_gemini_story(story_title, word_limit)
                 st.session_state.current_story = story_text
                 st.session_state.last_title = story_title
+                st.session_state.last_limit = word_limit
             except Exception as e:
                 st.error(f"Error generating story: {e}")
 
@@ -273,4 +293,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Tech Stack: Groq / Gemini / HF Router / Local Fallback + Pixabay Engine")
+st.sidebar.info("Tech Stack: Groq / Gemini / HF Router / Dynamic Fallback Engine")
