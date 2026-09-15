@@ -93,7 +93,7 @@ with col_slider:
 def generate_groq_story(title: str, limit: int) -> str:
     """Uses Groq API for rapid story generation."""
     if not groq_client:
-        st.error("⚠️ GROQ_API_KEY missing or invalid in st.secrets.")
+        st.error("⚠️ GROQ_API_KEY is missing or invalid in st.secrets.")
         return None
 
     prompt = (
@@ -145,14 +145,13 @@ def get_pixabay_photo_url(query: str) -> str:
             if res.status_code == 200:
                 hits = res.json().get("hits", [])
                 if hits:
-                    return hits[0]["webformatURL"]
+                    return hits[0].get("webformatURL") or hits[0].get("largeImageURL")
         except Exception:
             pass
-    # Fallback placeholder if no hits found or API key missing
     return "https://picsum.photos/1024/600"
 
 def get_pixabay_video_url(query: str) -> str:
-    """Fetches video clip from Pixabay API."""
+    """Fetches video clip from Pixabay API with dynamic resolution fallback."""
     if "PIXABAY_API_KEY" in st.secrets and st.secrets["PIXABAY_API_KEY"]:
         api_key = str(st.secrets["PIXABAY_API_KEY"]).strip()
         url = f"https://pixabay.com/api/videos/?key={api_key}&q={urllib.parse.quote(query)}&per_page=3"
@@ -161,14 +160,17 @@ def get_pixabay_video_url(query: str) -> str:
             if res.status_code == 200:
                 hits = res.json().get("hits", [])
                 if hits:
-                    return hits[0]["videos"]["medium"]["url"]
+                    videos = hits[0].get("videos", {})
+                    # Safe fallback across video resolutions
+                    for size in ["medium", "large", "small", "tiny"]:
+                        if size in videos and "url" in videos[size]:
+                            return videos[size]["url"]
         except Exception:
             pass
-    # Reliable open-access MP4 fallback stream
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 
 def generate_audio_narration(text: str) -> io.BytesIO:
-    """Generates MP3 audio buffer using gTTS."""
+    """Generates MP3 audio buffer using gTTS with write_to_fp."""
     tts = gTTS(text=text, lang='en')
     fp = io.BytesIO()
     tts.write_to_fp(fp)
@@ -222,7 +224,7 @@ if story_title:
                 with st.spinner("Searching Pixabay photo..."):
                     search_term = get_gemini_search_term(story_title)
                     photo_url = get_pixabay_photo_url(search_term)
-                    st.image(photo_url, caption=f"Photo result for search: '{search_term}'", use_container_width=True)
+                    st.image(photo_url, caption=f"Photo search keywords: '{search_term}'", use_container_width=True)
 
         with btn_col2:
             if st.button("🎥 Generate Scene Video"):
