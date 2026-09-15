@@ -1,6 +1,6 @@
 import urllib.parse
 import requests
-import Streamlit as st
+import streamlit as st
 from google import genai
 from groq import Groq
 
