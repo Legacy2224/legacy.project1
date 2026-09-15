@@ -104,7 +104,7 @@ def generate_groq_story(title: str, limit: int) -> str:
 
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Active Groq model
+            model="llama3-8b-8192",  # Fixed standard Groq Llama 3 model
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=2048,
