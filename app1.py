@@ -2,6 +2,8 @@ import urllib.parse
 import requests
 import streamlit as st
 from google import genai
+from gtts import gTTS
+import io
 
 # -------------------------------------------------------------------
 # 1. Page Configuration
@@ -62,7 +64,7 @@ st.markdown(
 # 3. User Inputs
 # -------------------------------------------------------------------
 st.title("✨ AI Story, Photo & Video Studio")
-st.write("Generate full AI stories complete with artwork photos and video clips!")
+st.write("Generate full AI stories complete with artwork photos, audio narration, and video clips!")
 
 col_input, col_slider = st.columns([2, 1])
 
@@ -82,7 +84,7 @@ with col_slider:
     )
 
 # -------------------------------------------------------------------
-# Core AI Generation Logic (Updated Active Model Endpoints)
+# Core AI & Media Generation Logic
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
@@ -96,8 +98,7 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Make the story approximately {limit} words long."
     )
 
-    # Active supported model endpoints based on API recommendation
-    available_models = ["gemini-3.6-flash", "gemini-3.1-pro-preview"]
+    available_models = ["gemini-2.5-flash", "gemini-2.0-flash"]
     errors = []
 
     for model_name in available_models:
@@ -133,6 +134,14 @@ def get_free_pixabay_video_url(title: str) -> str:
                 pass
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
+def generate_audio_narration(text: str) -> io.BytesIO:
+    """NEW FEATURE: Generates an MP3 audio narration buffer from text."""
+    tts = gTTS(text=text, lang='en')
+    fp = io.BytesIO()
+    tts.write_to_fp(fp)
+    fp.seek(0)
+    return fp
+
 # -------------------------------------------------------------------
 # 4. App Session State & Execution
 # -------------------------------------------------------------------
@@ -166,6 +175,13 @@ if story_title:
         st.write("---")
         st.write("### 🎬 Visual & Media Studio")
         
+        # Audio Narration Player
+        if st.button("🔊 Read Story Aloud (Generate Audio)"):
+            with st.spinner("Synthesizing audio narration..."):
+                audio_fp = generate_audio_narration(story_text)
+                st.audio(audio_fp, format="audio/mp3")
+
+        st.write("")
         btn_col1, btn_col2 = st.columns(2)
         
         with btn_col1:
