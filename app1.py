@@ -104,7 +104,7 @@ def generate_groq_story(title: str, limit: int) -> str:
 
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.3-70b-specdec",  # FIXED: Valid active model
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=2048,
