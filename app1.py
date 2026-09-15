@@ -96,8 +96,8 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Make the story approximately {limit} words long."
     )
 
-    # Updated list using exact supported model strings
-    available_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+    # Active supported model endpoints based on API recommendation
+    available_models = ["gemini-3.6-flash", "gemini-3.1-pro-preview"]
     errors = []
 
     for model_name in available_models:
