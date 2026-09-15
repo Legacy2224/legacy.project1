@@ -1,8 +1,9 @@
 import urllib.parse
 import requests
 import streamlit as st
+from groq import Groq
 from google import genai
-from gtts import gTTS
+from gTTS import gTTS
 import io
 
 # -------------------------------------------------------------------
@@ -14,21 +15,23 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Gemini Client
-client = None
-gemini_init_error = None
+# -------------------------------------------------------------------
+# Initialize API Clients
+# -------------------------------------------------------------------
+groq_client = None
+gemini_client = None
 
-try:
-    if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
-        gemini_key = str(st.secrets["GEMINI_API_KEY"]).strip()
-        if gemini_key and not gemini_key.startswith("your_"):
-            client = genai.Client(api_key=gemini_key)
-        else:
-            gemini_init_error = "GEMINI_API_KEY in secrets is using a placeholder string."
-    else:
-        gemini_init_error = "GEMINI_API_KEY is missing from st.secrets."
-except Exception as e:
-    gemini_init_error = str(e)
+# Groq Client Initialization
+if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
+    groq_key = str(st.secrets["GROQ_API_KEY"]).strip()
+    if groq_key and not groq_key.startswith("your_"):
+        groq_client = Groq(api_key=groq_key)
+
+# Gemini Client Initialization
+if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
+    gemini_key = str(st.secrets["GEMINI_API_KEY"]).strip()
+    if gemini_key and not gemini_key.startswith("your_"):
+        gemini_client = genai.Client(api_key=gemini_key)
 
 # -------------------------------------------------------------------
 # 2. Custom Sidebar & Styling
@@ -71,7 +74,7 @@ col_input, col_slider = st.columns([2, 1])
 with col_input:
     story_title = st.text_input(
         "Enter your Story Title:", 
-        placeholder="e.g., gaming"
+        placeholder="e.g., A journey through cyberpunk space"
     )
 
 with col_slider:
@@ -84,12 +87,13 @@ with col_slider:
     )
 
 # -------------------------------------------------------------------
-# Core AI & Media Generation Logic
+# Core AI & Media Logic
 # -------------------------------------------------------------------
 
-def generate_gemini_story(title: str, limit: int) -> str:
-    if not client:
-        st.error(f"⚠️ **Gemini Client Error:** {gemini_init_error}")
+def generate_groq_story(title: str, limit: int) -> str:
+    """Uses Groq API for rapid story generation."""
+    if not groq_client:
+        st.error("⚠️ GROQ_API_KEY missing or invalid in st.secrets.")
         return None
 
     prompt = (
@@ -99,58 +103,72 @@ def generate_gemini_story(title: str, limit: int) -> str:
     )
 
     try:
-        # Dynamically retrieve active models for your API key
-        available_models = []
-        for model_info in client.models.list():
-            # Standardize model string format
-            name = model_info.name.replace("models/", "") if hasattr(model_info, 'name') else str(model_info)
-            if "gemini" in name and "image" not in name and "tts" not in name:
-                available_models.append(name)
-
-        if not available_models:
-            # Fallback list if dynamic retrieval returns empty
-            available_models = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
-
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        return completion.choices[0].message.content
     except Exception as e:
-        available_models = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+        st.error(f"⚠️ **Groq API Error:** {str(e)}")
+        return None
 
-    errors = []
+def get_gemini_search_term(story_title: str) -> str:
+    """Uses Gemini API to extract 2-3 precise visual keywords for Pixabay search."""
+    if not gemini_client:
+        return story_title  # Fallback to direct title
 
-    for model_name in available_models:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-            )
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            errors.append(f"Model `{model_name}` error: {str(e)}")
+    prompt = (
+        f"Extract 2 to 3 essential visual keywords for finding stock photos/videos related to: '{story_title}'. "
+        "Return ONLY the keywords separated by spaces. Example output: space warrior planet"
+    )
 
-    error_report = "\n".join([f"- {err}" for err in errors])
-    st.error(f"⚠️ **Gemini API Execution Failed:**\n{error_report}")
-    return None
+    try:
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        if response and response.text:
+            return response.text.strip()
+    except Exception:
+        pass
+    return story_title
 
-def get_free_photo_url(title: str) -> str:
-    return f"https://picsum.photos/1024/600?blur=1"
-
-def get_free_pixabay_video_url(title: str) -> str:
+def get_pixabay_photo_url(query: str) -> str:
+    """Fetches photo from Pixabay API."""
     if "PIXABAY_API_KEY" in st.secrets and st.secrets["PIXABAY_API_KEY"]:
         api_key = str(st.secrets["PIXABAY_API_KEY"]).strip()
-        if api_key:
-            query_url = f"https://pixabay.com/api/videos/?key={api_key}&q={urllib.parse.quote(title)}&video_type=film&per_page=3"
-            try:
-                res = requests.get(query_url, timeout=5)
-                if res.status_code == 200:
-                    hits = res.json().get("hits", [])
-                    if hits:
-                        return hits[0]["videos"]["large"]["url"]
-            except Exception:
-                pass
-    return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+        url = f"https://pixabay.com/api/?key={api_key}&q={urllib.parse.quote(query)}&image_type=photo&per_page=3"
+        try:
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                hits = res.json().get("hits", [])
+                if hits:
+                    return hits[0]["webformatURL"]
+        except Exception:
+            pass
+    # Fallback placeholder if no hits found or API key missing
+    return "https://picsum.photos/1024/600"
+
+def get_pixabay_video_url(query: str) -> str:
+    """Fetches video clip from Pixabay API."""
+    if "PIXABAY_API_KEY" in st.secrets and st.secrets["PIXABAY_API_KEY"]:
+        api_key = str(st.secrets["PIXABAY_API_KEY"]).strip()
+        url = f"https://pixabay.com/api/videos/?key={api_key}&q={urllib.parse.quote(query)}&per_page=3"
+        try:
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                hits = res.json().get("hits", [])
+                if hits:
+                    return hits[0]["videos"]["medium"]["url"]
+        except Exception:
+            pass
+    # Reliable open-access MP4 fallback stream
+    return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 
 def generate_audio_narration(text: str) -> io.BytesIO:
-    """Generates an MP3 audio narration buffer from text."""
+    """Generates MP3 audio buffer using gTTS."""
     tts = gTTS(text=text, lang='en')
     fp = io.BytesIO()
     tts.write_to_fp(fp)
@@ -158,7 +176,7 @@ def generate_audio_narration(text: str) -> io.BytesIO:
     return fp
 
 # -------------------------------------------------------------------
-# 4. App Session State & Execution
+# 4. Session State & Execution
 # -------------------------------------------------------------------
 if "current_story" not in st.session_state:
     st.session_state.current_story = ""
@@ -171,8 +189,8 @@ if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
     if (st.session_state.last_title != story_title) or (st.session_state.last_limit != word_limit):
-        with st.spinner("Generating AI Story..."):
-            story_text = generate_gemini_story(story_title, word_limit)
+        with st.spinner("Generating AI Story via Groq..."):
+            story_text = generate_groq_story(story_title, word_limit)
             if story_text:
                 st.session_state.current_story = story_text
                 st.session_state.last_title = story_title
@@ -200,13 +218,15 @@ if story_title:
         btn_col1, btn_col2 = st.columns(2)
         
         with btn_col1:
-            if st.button("🖼️ Generate AI Photo"):
-                with st.spinner("Rendering photo artwork..."):
-                    photo_url = get_free_photo_url(story_title)
-                    st.image(photo_url, caption=f"Generated Photo: {story_title}", use_container_width=True)
+            if st.button("🖼️ Generate Photo"):
+                with st.spinner("Searching Pixabay photo..."):
+                    search_term = get_gemini_search_term(story_title)
+                    photo_url = get_pixabay_photo_url(search_term)
+                    st.image(photo_url, caption=f"Photo result for search: '{search_term}'", use_container_width=True)
 
         with btn_col2:
-            if st.button("🎥 Generate & Play Scene Video"):
-                with st.spinner("Loading video stream..."):
-                    video_url = get_free_pixabay_video_url(story_title)
+            if st.button("🎥 Generate Scene Video"):
+                with st.spinner("Searching Pixabay video..."):
+                    search_term = get_gemini_search_term(story_title)
+                    video_url = get_pixabay_video_url(search_term)
                     st.video(video_url)
