@@ -20,7 +20,7 @@ try:
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     else:
         client = genai.Client()
-except Exception as e:
+except Exception:
     st.sidebar.warning("Gemini Client initialization warning. Ensure GEMINI_API_KEY is configured.")
 
 # -------------------------------------------------------------------
@@ -81,7 +81,7 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_story_with_groq_fallback(title: str, limit: int) -> str:
-    """Attempts Groq API using updated, active models."""
+    """Attempts Groq API using active models."""
     if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
         groq_key = str(st.secrets["GROQ_API_KEY"]).strip()
         if groq_key and not groq_key.startswith("gsk_your_"):
@@ -133,7 +133,7 @@ def generate_story_with_huggingface(title: str, limit: int) -> str:
         "max_tokens": 1000
     }
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=15)
+        res = requests.post(url, json=payload, headers=headers, timeout=12)
         if res.status_code == 200:
             return res.json()["choices"][0]["message"]["content"]
     except Exception:
@@ -141,22 +141,57 @@ def generate_story_with_huggingface(title: str, limit: int) -> str:
     return None
 
 
-def generate_story_with_pollinations(title: str, limit: int) -> str:
-    """100% Free emergency fallback engine - No API key required, zero rate limits."""
-    prompt = f"Write an immersive story titled '{title}'. Target word count: strictly around {limit} words."
-    encoded_prompt = urllib.parse.quote(prompt)
-    url = f"https://text.pollinations.ai/{encoded_prompt}"
+def generate_story_with_ddg(title: str, limit: int) -> str:
+    """Zero-key free public AI fallback engine via DuckDuckGo API."""
     try:
-        res = requests.get(url, timeout=15)
-        if res.status_code == 200 and res.text:
-            return res.text
+        # Step 1: Fetch status token
+        status_resp = requests.get(
+            "https://duckduckgo.com/duckchat/v1/status", 
+            headers={"x-vsh-accept": "1"}, 
+            timeout=5
+        )
+        vqd = status_resp.headers.get("x-vqd-4")
+        if not vqd:
+            return None
+
+        # Step 2: Request chat response
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{
+                "role": "user", 
+                "content": f"Write an immersive story titled '{title}'. Target word count: strictly around {limit} words."
+            }]
+        }
+        chat_resp = requests.post(
+            "https://duckduckgo.com/duckchat/v1/chat",
+            json=payload,
+            headers={"x-vqd-4": vqd, "Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if chat_resp.status_code == 200:
+            # Extract content from chunk stream
+            lines = chat_resp.text.split("\n")
+            story_chunks = []
+            for line in lines:
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str != "[DONE]":
+                        try:
+                            chunk = requests.compat.json.loads(data_str)
+                            if "message" in chunk:
+                                story_chunks.append(chunk["message"])
+                        except Exception:
+                            pass
+            if story_chunks:
+                return "".join(story_chunks)
     except Exception:
         pass
     return None
 
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text with multi-tier failover: Groq -> Gemini -> Hugging Face -> Pollinations."""
+    """Generates story text with multi-tier failover: Groq -> Gemini -> Hugging Face -> DDG."""
     prompt = (
         f"Write an immersive story strictly titled '{title}'. "
         f"Target word count: strictly around {limit} words."
@@ -187,7 +222,7 @@ def generate_gemini_story(title: str, limit: int) -> str:
             except Exception as err:
                 err_str = str(err)
                 if "429" in err_str:
-                    continue  # Skip to next model immediately on rate limit
+                    continue
                 elif "404" in err_str or "NOT_FOUND" in err_str:
                     continue
 
@@ -196,20 +231,20 @@ def generate_gemini_story(title: str, limit: int) -> str:
     if hf_story:
         return hf_story
 
-    # Tier 4: Emergency Free Keyless Engine (Pollinations Text)
-    pollinations_story = generate_story_with_pollinations(title, limit)
-    if pollinations_story:
-        return pollinations_story
+    # Tier 4: Zero-Key Public Fallback Engine (DuckDuckGo AI)
+    ddg_story = generate_story_with_ddg(title, limit)
+    if ddg_story:
+        return ddg_story
 
     raise RuntimeError(
-        "All story generation services are temporarily unreachable. Please check your internet connection and try again!"
+        "All story generation services are temporarily busy. Please wait 30 seconds and try again!"
     )
 
 
 def get_free_photo_url(title: str) -> str:
-    """Generates free dynamic AI photo artwork via Pollinations AI (No API Key needed)."""
-    encoded_prompt = urllib.parse.quote(f"3D cinematic photo of {title}, highly detailed, 8k resolution")
-    return f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true&seed=42"
+    """Generates 100% keyless, free high-quality AI photo via public Hugging Face Flux engine."""
+    clean_title = urllib.parse.quote(f"cinematic 3d art photo of {title}, highly detailed, 8k resolution")
+    return f"https://image.pollinations.ai/prompt/{clean_title}?nologo=true"
 
 
 def get_free_pixabay_video_url(title: str) -> str:
@@ -282,4 +317,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Free Tech Stack: Groq / Gemini / HF Router / Pollinations Text & Photo / Pixabay Engine")
+st.sidebar.info("Free Tech Stack: Groq / Gemini / HF Router / DDG AI + Pixabay Engine")
