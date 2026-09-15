@@ -112,7 +112,12 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Target word count: strictly around {limit} words."
     )
     
-    # Standard models available on free tier
+    # 1. First, check and run Groq if it's available in secrets
+    groq_story = generate_story_with_groq_fallback(title, limit)
+    if groq_story:
+        return groq_story
+
+    # 2. If Groq isn't configured or failed, try standard Gemini Flash models
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
     
     if client:
@@ -132,14 +137,11 @@ def generate_gemini_story(title: str, limit: int) -> str:
                     elif "404" in err_str or "NOT_FOUND" in err_str:
                         break  # Switch to next model if model name fails
 
-    # Fallback to Groq API if Gemini fails or is quota-exhausted
-    groq_story = generate_story_with_groq_fallback(title, limit)
-    if groq_story:
-        return groq_story
-
+    # Detailed debug error message if everything fails
+    has_groq = "GROQ_API_KEY" in st.secrets
     raise RuntimeError(
-        "All Gemini API models hit rate limits or quota caps. "
-        "Wait 1 minute, or add a free GROQ_API_KEY to your secrets.toml as a backup!"
+        f"Could not generate story. Groq Key Detected in Secrets: {has_groq}. "
+        "If False, double check `.streamlit/secrets.toml` name, spelling, and restart Streamlit with Ctrl+C."
     )
 
 
@@ -220,4 +222,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Free Tech Stack: Gemini 2.5 Flash + Pollinations AI + Pixabay Engine")
+st.sidebar.info("Free Tech Stack: Groq / Gemini 2.5 Flash + Pollinations AI + Pixabay Engine")
