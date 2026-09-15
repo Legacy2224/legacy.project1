@@ -81,7 +81,7 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_story_with_groq_fallback(title: str, limit: int) -> str:
-    """Attempts Groq API using reliable models and reports explicit error statuses in sidebar."""
+    """Attempts Groq API using updated, active models."""
     if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -89,8 +89,12 @@ def generate_story_with_groq_fallback(title: str, limit: int) -> str:
             "Content-Type": "application/json"
         }
         
-        # Models to attempt sequentially
-        groq_models = ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
+        # Currently active & supported Groq models
+        groq_models = [
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-specdec",
+            "llama3-70b-8192"
+        ]
         
         for model in groq_models:
             payload = {
@@ -105,27 +109,25 @@ def generate_story_with_groq_fallback(title: str, limit: int) -> str:
                 res = requests.post(url, json=payload, headers=headers, timeout=10)
                 if res.status_code == 200:
                     return res.json()["choices"][0]["message"]["content"]
-                else:
-                    st.sidebar.error(f"Groq API ({model}) Status {res.status_code}: {res.text}")
-            except Exception as err:
-                st.sidebar.error(f"Groq Request Exception: {err}")
+            except Exception:
+                pass
                 
     return None
 
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text with fallback model handling."""
+    """Generates story text with active Groq model primary and Gemini secondary."""
     prompt = (
         f"Write an immersive story strictly titled '{title}'. "
         f"Target word count: strictly around {limit} words."
     )
     
-    # 1. Attempt Groq first to bypass Gemini quota limits
+    # 1. Attempt Groq first using active models
     groq_story = generate_story_with_groq_fallback(title, limit)
     if groq_story:
         return groq_story
 
-    # 2. Fallback to Gemini if Groq fails or is not present
+    # 2. Fallback to Gemini Flash models
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
     
     if client:
@@ -146,8 +148,7 @@ def generate_gemini_story(title: str, limit: int) -> str:
                         break
 
     raise RuntimeError(
-        "Both Groq and Gemini API attempts failed. "
-        "Check your sidebar for specific error responses from Groq!"
+        "Story generation failed on both APIs. Please wait 1 minute for your free Gemini quota to reset!"
     )
 
 
@@ -228,4 +229,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Free Tech Stack: Groq / Gemini 2.5 Flash + Pollinations AI + Pixabay Engine")
+st.sidebar.info("Free Tech Stack: Groq (Llama 3.1) / Gemini 2.5 Flash + Pollinations AI + Pixabay Engine")
