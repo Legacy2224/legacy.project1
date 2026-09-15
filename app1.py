@@ -1,7 +1,8 @@
 import urllib.parse
 import requests
-import streamlit as st
+import Streamlit as st
 from google import genai
+from groq import Groq
 
 # -------------------------------------------------------------------
 # 1. Page Configuration
@@ -15,7 +16,6 @@ st.set_page_config(
 # Initialize Gemini Client
 client = None
 gemini_init_error = None
-
 try:
     if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
         gemini_key = str(st.secrets["GEMINI_API_KEY"]).strip()
@@ -27,6 +27,13 @@ try:
         gemini_init_error = "GEMINI_API_KEY is missing from st.secrets."
 except Exception as e:
     gemini_init_error = str(e)
+
+# Initialize Groq Client
+groq_client = None
+if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
+    groq_key = str(st.secrets["GROQ_API_KEY"]).strip()
+    if groq_key and not groq_key.startswith("your_"):
+        groq_client = Groq(api_key=groq_key)
 
 # -------------------------------------------------------------------
 # 2. Custom Sidebar & Styling
@@ -82,7 +89,7 @@ with col_slider:
     )
 
 # -------------------------------------------------------------------
-# Core AI Generation Logic (Updated Active Model Endpoints)
+# Core AI Generation & Visual Tag Extraction Logic
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
@@ -96,8 +103,7 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Make the story approximately {limit} words long."
     )
 
-    # Active supported model endpoints based on API recommendation
-    available_models = ["gemini-3.6-flash", "gemini-3.1-pro-preview"]
+    available_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
     errors = []
 
     for model_name in available_models:
@@ -115,22 +121,79 @@ def generate_gemini_story(title: str, limit: int) -> str:
     st.error(f"⚠️ **Gemini API Execution Failed:**\n{error_report}")
     return None
 
-def get_free_photo_url(title: str) -> str:
-    return f"https://picsum.photos/1024/600?blur=1"
+def extract_visual_keywords(story_text: str, fallback_title: str) -> str:
+    """Uses Groq or Gemini to extract 2-4 clean keywords representing the main visual theme."""
+    prompt = (
+        f"Extract 2 to 4 distinct, highly visual search keywords representing key elements "
+        f"(characters, environment, core action) of this story: '{story_text[:400]}...'. "
+        f"Respond ONLY with space-separated plain keywords (e.g. 'cyberpunk gamer neon classroom'). Do not include punctuation or full sentences."
+    )
+    
+    # Try Groq first
+    if groq_client:
+        try:
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=20,
+            )
+            keywords = completion.choices[0].message.content.strip()
+            if keywords:
+                return keywords
+        except Exception:
+            pass
 
-def get_free_pixabay_video_url(title: str) -> str:
+    # Fallback to Gemini
+    if client:
+        try:
+            res = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            if res and res.text:
+                return res.text.strip()
+        except Exception:
+            pass
+
+    return fallback_title
+
+def get_pixabay_photo_url(query: str) -> str:
+    """Fetches a high-quality relevant photo from Pixabay API based on story keywords."""
     if "PIXABAY_API_KEY" in st.secrets and st.secrets["PIXABAY_API_KEY"]:
         api_key = str(st.secrets["PIXABAY_API_KEY"]).strip()
         if api_key:
-            query_url = f"https://pixabay.com/api/videos/?key={api_key}&q={urllib.parse.quote(title)}&video_type=film&per_page=3"
+            query_url = f"https://pixabay.com/api/?key={api_key}&q={urllib.parse.quote(query)}&image_type=photo&orientation=horizontal&per_page=5&safesearch=true"
             try:
                 res = requests.get(query_url, timeout=5)
                 if res.status_code == 200:
                     hits = res.json().get("hits", [])
                     if hits:
-                        return hits[0]["videos"]["large"]["url"]
+                        return hits[0]["largeImageURL"]
             except Exception:
                 pass
+    
+    # Fallback if no specific Pixabay image found
+    return f"https://picsum.photos/1024/600"
+
+def get_pixabay_video_url(query: str) -> str:
+    """Fetches a relevant video from Pixabay API based on story keywords."""
+    if "PIXABAY_API_KEY" in st.secrets and st.secrets["PIXABAY_API_KEY"]:
+        api_key = str(st.secrets["PIXABAY_API_KEY"]).strip()
+        if api_key:
+            query_url = f"https://pixabay.com/api/videos/?key={api_key}&q={urllib.parse.quote(query)}&per_page=5"
+            try:
+                res = requests.get(query_url, timeout=5)
+                if res.status_code == 200:
+                    hits = res.json().get("hits", [])
+                    if hits:
+                        videos = hits[0].get("videos", {})
+                        video_obj = videos.get("large") or videos.get("medium") or videos.get("small")
+                        if video_obj and "url" in video_obj:
+                            return video_obj["url"]
+            except Exception:
+                pass
+
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
 # -------------------------------------------------------------------
@@ -170,12 +233,14 @@ if story_title:
         
         with btn_col1:
             if st.button("🖼️ Generate AI Photo"):
-                with st.spinner("Rendering photo artwork..."):
-                    photo_url = get_free_photo_url(story_title)
-                    st.image(photo_url, caption=f"Generated Photo: {story_title}", use_container_width=True)
+                with st.spinner("Extracting visual scene and querying photo API..."):
+                    visual_tags = extract_visual_keywords(story_text, story_title)
+                    photo_url = get_pixabay_photo_url(visual_tags)
+                    st.image(photo_url, caption=f"Matched Visual Tags: '{visual_tags}'", use_container_width=True)
 
         with btn_col2:
             if st.button("🎥 Generate & Play Scene Video"):
-                with st.spinner("Loading video stream..."):
-                    video_url = get_free_pixabay_video_url(story_title)
+                with st.spinner("Extracting scene keyframes and searching video API..."):
+                    visual_tags = extract_visual_keywords(story_text, story_title)
+                    video_url = get_pixabay_video_url(visual_tags)
                     st.video(video_url)
