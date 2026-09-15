@@ -98,7 +98,22 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Make the story approximately {limit} words long."
     )
 
-    available_models = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    try:
+        # Dynamically retrieve active models for your API key
+        available_models = []
+        for model_info in client.models.list():
+            # Standardize model string format
+            name = model_info.name.replace("models/", "") if hasattr(model_info, 'name') else str(model_info)
+            if "gemini" in name and "image" not in name and "tts" not in name:
+                available_models.append(name)
+
+        if not available_models:
+            # Fallback list if dynamic retrieval returns empty
+            available_models = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+
+    except Exception as e:
+        available_models = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+
     errors = []
 
     for model_name in available_models:
@@ -135,7 +150,7 @@ def get_free_pixabay_video_url(title: str) -> str:
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
 def generate_audio_narration(text: str) -> io.BytesIO:
-    """NEW FEATURE: Generates an MP3 audio narration buffer from text."""
+    """Generates an MP3 audio narration buffer from text."""
     tts = gTTS(text=text, lang='en')
     fp = io.BytesIO()
     tts.write_to_fp(fp)
