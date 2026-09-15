@@ -12,7 +12,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Gemini Client safely
+# Initialize Gemini Client
 client = None
 gemini_init_error = None
 
@@ -24,7 +24,7 @@ try:
         else:
             gemini_init_error = "GEMINI_API_KEY in secrets is using a placeholder string."
     else:
-        gemini_init_error = "GEMINI_API_KEY missing from st.secrets."
+        gemini_init_error = "GEMINI_API_KEY is missing from st.secrets."
 except Exception as e:
     gemini_init_error = str(e)
 
@@ -82,58 +82,33 @@ with col_slider:
     )
 
 # -------------------------------------------------------------------
-# Helper Functions & Model Integration
+# Core AI Generation Logic (Direct Gemini Call Only)
 # -------------------------------------------------------------------
 
-def build_strict_prompt(title: str, limit: int) -> str:
-    return (
-        f"Write a rich, highly detailed story titled '{title}'. "
-        f"Focus deeply on plot, world-building, and characters specifically centered on '{title}'. "
-        f"Make sure the response is approximately {limit} words long."
+def generate_gemini_story(title: str, limit: int) -> str:
+    if not client:
+        st.error(f"⚠️ **Gemini Client Error:** {gemini_init_error}")
+        return None
+
+    prompt = (
+        f"Write an original, engaging story titled '{title}'. "
+        f"Focus specifically on plot, characters, and actions themed around '{title}'. "
+        f"Make the story approximately {limit} words long."
     )
 
-def generate_gemini_story(title: str, limit: int) -> str:
-    prompt = build_strict_prompt(title, limit)
-    errors = []
-
-    # Tier 1: Gemini API
-    if client:
-        for model_name in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
-                if response and response.text:
-                    return response.text
-            except Exception as e:
-                errors.append(f"Gemini ({model_name}) Error: {str(e)}")
-    else:
-        errors.append(f"Gemini Client not initialized: {gemini_init_error}")
-
-    # Tier 2: Groq API
-    if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
-        try:
-            groq_key = str(st.secrets["GROQ_API_KEY"]).strip()
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-            payload = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": min(4000, max(500, int(limit * 2.5)))
-            }
-            res = requests.post(url, json=payload, headers=headers, timeout=10)
-            if res.status_code == 200:
-                return res.json()["choices"][0]["message"]["content"]
-            else:
-                errors.append(f"Groq API Error Status {res.status_code}: {res.text}")
-        except Exception as e:
-            errors.append(f"Groq API Exception: {str(e)}")
-
-    # Display error diagnostic report if APIs fail
-    error_report = "\n".join([f"- {err}" for err in errors])
-    st.error(f"**API Execution Failed! Diagnostic Report:**\n{error_report}")
-    return None
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        if response and response.text:
+            return response.text
+        else:
+            st.error("⚠️ Gemini API returned an empty response.")
+            return None
+    except Exception as e:
+        st.error(f"⚠️ **Gemini API Error:** {str(e)}")
+        return None
 
 def get_free_photo_url(title: str) -> str:
     return f"https://picsum.photos/1024/600?blur=1"
@@ -154,7 +129,7 @@ def get_free_pixabay_video_url(title: str) -> str:
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
 # -------------------------------------------------------------------
-# Session State Management
+# 4. App Session State & Execution
 # -------------------------------------------------------------------
 if "current_story" not in st.session_state:
     st.session_state.current_story = ""
@@ -163,9 +138,6 @@ if "last_title" not in st.session_state:
 if "last_limit" not in st.session_state:
     st.session_state.last_limit = 0
 
-# -------------------------------------------------------------------
-# 4. Core Execution Logic
-# -------------------------------------------------------------------
 if story_title:
     st.subheader(f"📖 Story: {story_title}")
     
@@ -176,6 +148,8 @@ if story_title:
                 st.session_state.current_story = story_text
                 st.session_state.last_title = story_title
                 st.session_state.last_limit = word_limit
+            else:
+                st.session_state.current_story = ""
 
     if st.session_state.current_story:
         story_text = st.session_state.current_story
@@ -191,14 +165,12 @@ if story_title:
         
         with btn_col1:
             if st.button("🖼️ Generate AI Photo"):
-                with st.spinner("Rendering artwork..."):
+                with st.spinner("Rendering photo artwork..."):
                     photo_url = get_free_photo_url(story_title)
                     st.image(photo_url, caption=f"Generated Photo: {story_title}", use_container_width=True)
-                    st.success("Photo rendered successfully!")
 
         with btn_col2:
             if st.button("🎥 Generate & Play Scene Video"):
                 with st.spinner("Loading video stream..."):
                     video_url = get_free_pixabay_video_url(story_title)
                     st.video(video_url)
-                    st.success("Video stream loaded!")
