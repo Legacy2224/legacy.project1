@@ -3,7 +3,7 @@ import requests
 import streamlit as st
 from groq import Groq
 from google import genai
-from gTTs import gTTs
+from gTTS import gTTS
 import io
 
 # -------------------------------------------------------------------
