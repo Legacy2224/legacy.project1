@@ -81,16 +81,17 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def build_strict_prompt(title: str, limit: int) -> str:
-    """Creates a detailed prompt forcing the model to meet the user's targeted word length."""
+    """Creates a detailed prompt forcing the model to write an actual narrative of requested length."""
     return (
-        f"Write a complete, highly detailed story titled '{title}'.\n\n"
-        f"CRITICAL REQUIREMENT: The story MUST be approximately {limit} words long. "
-        f"Do NOT write a short summary. Expand on the characters, environment, dialogue, sensory details, "
-        f"and plot progression so that the length strictly approaches {limit} words."
+        f"Write a complete, imaginative story strictly titled '{title}'.\n\n"
+        f"INSTRUCTIONS:\n"
+        f"1. Focus directly on the topic of '{title}' with real characters, plot points, and dialogue.\n"
+        f"2. The story MUST be approximately {limit} words long.\n"
+        f"3. Do NOT provide meta-commentary, summaries, or generic statements."
     )
 
 
-def generate_story_with_groq_fallback(title: str, limit: int) -> str:
+def generate_story_with_groq(title: str, limit: int) -> str:
     """Attempts Groq API using active models."""
     if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
         groq_key = str(st.secrets["GROQ_API_KEY"]).strip()
@@ -128,7 +129,7 @@ def generate_story_with_groq_fallback(title: str, limit: int) -> str:
 
 
 def generate_story_with_huggingface(title: str, limit: int) -> str:
-    """Free public fallback using Hugging Face router API."""
+    """Free fallback using Hugging Face router API."""
     url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     
@@ -154,40 +155,28 @@ def generate_story_with_huggingface(title: str, limit: int) -> str:
     return None
 
 
-def generate_local_fallback_story(title: str, limit: int) -> str:
-    """Guaranteed non-repeating story engine constructed dynamically for offline/fallback mode."""
-    sections = [
-        f"The legend of '{title}' began long ago in a land where quiet whispers filled the air and ancient secrets rested beneath peaceful skies. People throughout the realm spoke of this tale in quiet admiration, knowing that extraordinary events were destined to unfold.",
-        f"As dawn broke across the horizon, the central figures of '{title}' set out on an unprecedented journey. The surroundings were rich with color and emotion, demanding deep focus and unwavering determination from everyone involved. Danger and opportunity walked hand in hand with every step forward.",
-        f"Midway through the trek, an unexpected conflict emerged that challenged their fundamental resolve. Difficult choices had to be made under intense pressure, testing their instincts, strength, and trust in one another. Every decision carried profound weight for what was to come next.",
-        f"Rising above adversity through ingenuity and teamwork, the climax of '{title}' reached its breathtaking moment. Surmounting the ultimate obstacle allowed peace and clarity to finally return to the land, satisfying the ancient prophecies.",
-        f"In the aftermath of these monumental events, the legacy of '{title}' became immortalized. Future generations would look back at this incredible chapter with wonder, remembering the lessons learned and the courage displayed throughout the entire saga."
-    ]
-    
-    full_narrative = "\n\n".join(sections)
-    words = full_narrative.split()
-    
-    # Trim or padded to match target word count cleanly
-    if len(words) >= limit:
-        return " ".join(words[:limit]) + "..."
-    else:
-        # Extend with descriptive story prose rather than identical sentences
-        additional_prose = f" This heroic chapter of '{title}' stands as a timeless reminder of perseverance, triumph, and the eternal power of narrative."
-        while len(words) < limit:
-            words.extend(additional_prose.split())
-        return " ".join(words[:limit])
+def generate_story_keyless_backup(title: str, limit: int) -> str:
+    """Keyless public inference API endpoint for true narrative fallback."""
+    url = f"https://text.pollinations.ai/{urllib.parse.quote(build_strict_prompt(title, limit))}"
+    try:
+        res = requests.get(url, timeout=12)
+        if res.status_code == 200 and len(res.text) > 50:
+            return res.text
+    except Exception:
+        pass
+    return None
 
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text with multi-tier failover: Groq -> Gemini -> Hugging Face -> Local Engine."""
+    """Multi-tier failover: Groq -> Gemini -> Hugging Face -> Keyless AI Backup."""
     prompt = build_strict_prompt(title, limit)
     
     # Tier 1: Groq API
-    groq_story = generate_story_with_groq_fallback(title, limit)
+    groq_story = generate_story_with_groq(title, limit)
     if groq_story:
         return groq_story
 
-    # Tier 2: Gemini (Flash & Lite models)
+    # Tier 2: Gemini
     models_to_try = [
         "gemini-2.5-flash", 
         "gemini-2.5-flash-lite", 
@@ -212,8 +201,12 @@ def generate_gemini_story(title: str, limit: int) -> str:
     if hf_story:
         return hf_story
 
-    # Tier 4: Dynamic Non-Repeating Local Fallback Engine
-    return generate_local_fallback_story(title, limit)
+    # Tier 4: Public Keyless Model Backup
+    keyless_story = generate_story_keyless_backup(title, limit)
+    if keyless_story:
+        return keyless_story
+
+    raise RuntimeError("API keys missing or temporary network blockage. Please verify your secrets.toml file!")
 
 
 def get_free_photo_url(title: str) -> str:
@@ -296,4 +289,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Tech Stack: Groq / Gemini / HF Router / Dynamic Fallback Engine")
+st.sidebar.info("Tech Stack: Groq / Gemini / HF Router / Keyless AI Backup")
