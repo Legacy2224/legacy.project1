@@ -2,4 +2,3 @@ streamlit
 google-genai
 groq
 requests
-edge-tts
