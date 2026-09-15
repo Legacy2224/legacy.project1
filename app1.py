@@ -83,41 +83,47 @@ with col_slider:
 def generate_story_with_groq_fallback(title: str, limit: int) -> str:
     """Attempts Groq API using updated, active models."""
     if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {st.secrets['GROQ_API_KEY'].strip()}",
-            "Content-Type": "application/json"
-        }
-        
-        # Currently active & supported Groq models
-        groq_models = [
-            "llama-3.1-8b-instant",
-            "llama-3.3-70b-specdec",
-            "llama3-70b-8192"
-        ]
-        
-        for model in groq_models:
-            payload = {
-                "model": model,
-                "messages": [{
-                    "role": "user", 
-                    "content": f"Write an immersive story strictly titled '{title}'. Target word count: around {limit} words."
-                }],
-                "temperature": 0.7
+        groq_key = str(st.secrets["GROQ_API_KEY"]).strip()
+        if groq_key and not groq_key.startswith("gsk_your_"):
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
             }
-            try:
-                res = requests.post(url, json=payload, headers=headers, timeout=10)
-                if res.status_code == 200:
-                    return res.json()["choices"][0]["message"]["content"]
-            except Exception:
-                pass
+            
+            groq_models = [
+                "llama-3.1-8b-instant",
+                "llama-3.3-70b-specdec",
+                "llama3-70b-8192"
+            ]
+            
+            for model in groq_models:
+                payload = {
+                    "model": model,
+                    "messages": [{
+                        "role": "user", 
+                        "content": f"Write an immersive story strictly titled '{title}'. Target word count: around {limit} words."
+                    }],
+                    "temperature": 0.7
+                }
+                try:
+                    res = requests.post(url, json=payload, headers=headers, timeout=8)
+                    if res.status_code == 200:
+                        return res.json()["choices"][0]["message"]["content"]
+                except Exception:
+                    pass
                 
     return None
 
 
 def generate_story_with_huggingface(title: str, limit: int) -> str:
-    """Free public fallback using Hugging Face router when Groq/Gemini fail."""
+    """Free public fallback using Hugging Face router."""
     url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    
+    if "HF_TOKEN" in st.secrets and st.secrets["HF_TOKEN"]:
+        headers["Authorization"] = f"Bearer {st.secrets['HF_TOKEN'].strip()}"
+
     payload = {
         "model": "Qwen/Qwen2.5-72B-Instruct",
         "messages": [{
@@ -127,7 +133,7 @@ def generate_story_with_huggingface(title: str, limit: int) -> str:
         "max_tokens": 1000
     }
     try:
-        res = requests.post(url, json=payload, timeout=12)
+        res = requests.post(url, json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
             return res.json()["choices"][0]["message"]["content"]
     except Exception:
@@ -135,19 +141,33 @@ def generate_story_with_huggingface(title: str, limit: int) -> str:
     return None
 
 
+def generate_story_with_pollinations(title: str, limit: int) -> str:
+    """100% Free emergency fallback engine - No API key required, zero rate limits."""
+    prompt = f"Write an immersive story titled '{title}'. Target word count: strictly around {limit} words."
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"https://text.pollinations.ai/{encoded_prompt}"
+    try:
+        res = requests.get(url, timeout=15)
+        if res.status_code == 200 and res.text:
+            return res.text
+    except Exception:
+        pass
+    return None
+
+
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text with fallback model handling: Groq -> Gemini (Flash & Lite) -> Hugging Face."""
+    """Generates story text with multi-tier failover: Groq -> Gemini -> Hugging Face -> Pollinations."""
     prompt = (
         f"Write an immersive story strictly titled '{title}'. "
         f"Target word count: strictly around {limit} words."
     )
     
-    # 1. Attempt Groq first to bypass Gemini quota limits
+    # Tier 1: Groq API
     groq_story = generate_story_with_groq_fallback(title, limit)
     if groq_story:
         return groq_story
 
-    # 2. Fallback to Gemini with Flash-Lite backup models
+    # Tier 2: Gemini (Flash & Lite models)
     models_to_try = [
         "gemini-2.5-flash", 
         "gemini-2.5-flash-lite", 
@@ -157,28 +177,32 @@ def generate_gemini_story(title: str, limit: int) -> str:
     
     if client:
         for model_name in models_to_try:
-            for attempt in range(2):
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                    )
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                if response and response.text:
                     return response.text
-                except Exception as err:
-                    err_str = str(err)
-                    if "429" in err_str:
-                        time.sleep(1.5)
-                        continue
-                    elif "404" in err_str or "NOT_FOUND" in err_str:
-                        break
+            except Exception as err:
+                err_str = str(err)
+                if "429" in err_str:
+                    continue  # Skip to next model immediately on rate limit
+                elif "404" in err_str or "NOT_FOUND" in err_str:
+                    continue
 
-    # 3. Public Hugging Face Fallback (No API key required)
+    # Tier 3: Hugging Face Public Inference
     hf_story = generate_story_with_huggingface(title, limit)
     if hf_story:
         return hf_story
 
+    # Tier 4: Emergency Free Keyless Engine (Pollinations Text)
+    pollinations_story = generate_story_with_pollinations(title, limit)
+    if pollinations_story:
+        return pollinations_story
+
     raise RuntimeError(
-        "All story generation services are currently busy or rate-limited. Please wait 30 seconds and try again!"
+        "All story generation services are temporarily unreachable. Please check your internet connection and try again!"
     )
 
 
@@ -202,7 +226,6 @@ def get_free_pixabay_video_url(title: str) -> str:
         except Exception:
             pass
 
-    # Standard public sample video clip baseline fallback
     return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
 # -------------------------------------------------------------------
@@ -259,4 +282,4 @@ if story_title:
                     st.success("Video loaded successfully!")
 
 st.sidebar.write("---")
-st.sidebar.info("Free Tech Stack: Groq / Gemini 2.5 Flash & Lite / HF Router + Pollinations AI + Pixabay Engine")
+st.sidebar.info("Free Tech Stack: Groq / Gemini / HF Router / Pollinations Text & Photo / Pixabay Engine")
