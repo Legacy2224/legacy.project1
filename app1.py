@@ -1,4 +1,3 @@
-Gemini API Execution Failed:
 import urllib.parse
 import requests
 import streamlit as st
