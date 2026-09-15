@@ -82,7 +82,7 @@ with col_slider:
     )
 
 # -------------------------------------------------------------------
-# Core AI Generation Logic (Gemini API with Fallback Models)
+# Core AI Generation Logic (Updated Active Model Endpoints)
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
@@ -96,8 +96,8 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Make the story approximately {limit} words long."
     )
 
-    # Active supported model endpoints
-    available_models = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    # Updated list using exact supported model strings
+    available_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
     errors = []
 
     for model_name in available_models:
