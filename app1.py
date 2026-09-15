@@ -81,43 +81,51 @@ with col_slider:
 # -------------------------------------------------------------------
 
 def generate_story_with_groq_fallback(title: str, limit: int) -> str:
-    """Attempts Groq API if configured, providing an instant alternative if Gemini is out of quota."""
+    """Attempts Groq API using reliable models and reports explicit error statuses in sidebar."""
     if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
-        try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {st.secrets['GROQ_API_KEY']}",
-                "Content-Type": "application/json"
-            }
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {st.secrets['GROQ_API_KEY'].strip()}",
+            "Content-Type": "application/json"
+        }
+        
+        # Models to attempt sequentially
+        groq_models = ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
+        
+        for model in groq_models:
             payload = {
-                "model": "llama-3.3-70b-versatile",
+                "model": model,
                 "messages": [{
                     "role": "user", 
                     "content": f"Write an immersive story strictly titled '{title}'. Target word count: around {limit} words."
                 }],
                 "temperature": 0.7
             }
-            res = requests.post(url, json=payload, headers=headers, timeout=10)
-            if res.status_code == 200:
-                return res.json()["choices"][0]["message"]["content"]
-        except Exception:
-            pass
+            try:
+                res = requests.post(url, json=payload, headers=headers, timeout=10)
+                if res.status_code == 200:
+                    return res.json()["choices"][0]["message"]["content"]
+                else:
+                    st.sidebar.error(f"Groq API ({model}) Status {res.status_code}: {res.text}")
+            except Exception as err:
+                st.sidebar.error(f"Groq Request Exception: {err}")
+                
     return None
 
 
 def generate_gemini_story(title: str, limit: int) -> str:
-    """Generates story text with robust error handling and model switching."""
+    """Generates story text with fallback model handling."""
     prompt = (
         f"Write an immersive story strictly titled '{title}'. "
         f"Target word count: strictly around {limit} words."
     )
     
-    # 1. First, check and run Groq if it's available in secrets
+    # 1. Attempt Groq first to bypass Gemini quota limits
     groq_story = generate_story_with_groq_fallback(title, limit)
     if groq_story:
         return groq_story
 
-    # 2. If Groq isn't configured or failed, try standard Gemini Flash models
+    # 2. Fallback to Gemini if Groq fails or is not present
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
     
     if client:
@@ -132,16 +140,14 @@ def generate_gemini_story(title: str, limit: int) -> str:
                 except Exception as err:
                     err_str = str(err)
                     if "429" in err_str:
-                        time.sleep(2)  # Short retry delay for rate limits
+                        time.sleep(2)
                         continue
                     elif "404" in err_str or "NOT_FOUND" in err_str:
-                        break  # Switch to next model if model name fails
+                        break
 
-    # Detailed debug error message if everything fails
-    has_groq = "GROQ_API_KEY" in st.secrets
     raise RuntimeError(
-        f"Could not generate story. Groq Key Detected in Secrets: {has_groq}. "
-        "If False, double check `.streamlit/secrets.toml` name, spelling, and restart Streamlit with Ctrl+C."
+        "Both Groq and Gemini API attempts failed. "
+        "Check your sidebar for specific error responses from Groq!"
     )
 
 
