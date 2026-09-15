@@ -71,19 +71,29 @@ st.write("Generate full AI stories complete with artwork photos, audio narration
 
 col_input, col_slider = st.columns([2, 1])
 
-with col_input:
-    story_title = st.text_input(
-        "Enter your Story Title:", 
-        placeholder="e.g., A journey through cyberpunk space"
+def generate_groq_story(title: str, limit: int) -> str:
+    """Uses Groq API for rapid story generation."""
+    if not groq_client:
+        st.error("⚠️ GROQ_API_KEY is missing or invalid in st.secrets.")
+        return None
+
+    prompt = (
+        f"Write an original, engaging story titled '{title}'. "
+        f"Focus specifically on plot, characters, and actions themed around '{title}'. "
+        f"Make the story approximately {limit} words long."
     )
 
-with col_slider:
-    word_limit = st.slider(
-        label="📏 Select Word Limit:",
-        min_value=50,
-        max_value=1000,
-        value=350,
-        step=25
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",  # UPDATED TO ACTIVE MODEL
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        st.error(f"⚠️ **Groq API Error:** {str(e)}")
+        return None
     )
 
 # -------------------------------------------------------------------
