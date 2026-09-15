@@ -82,7 +82,7 @@ with col_slider:
     )
 
 # -------------------------------------------------------------------
-# Core AI Generation Logic (Direct Gemini Call Only)
+# Core AI Generation Logic (Gemini API with Fallback Models)
 # -------------------------------------------------------------------
 
 def generate_gemini_story(title: str, limit: int) -> str:
@@ -96,19 +96,24 @@ def generate_gemini_story(title: str, limit: int) -> str:
         f"Make the story approximately {limit} words long."
     )
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        if response and response.text:
-            return response.text
-        else:
-            st.error("⚠️ Gemini API returned an empty response.")
-            return None
-    except Exception as e:
-        st.error(f"⚠️ **Gemini API Error:** {str(e)}")
-        return None
+    # Active supported model endpoints
+    available_models = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    errors = []
+
+    for model_name in available_models:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            errors.append(f"Model `{model_name}` error: {str(e)}")
+
+    error_report = "\n".join([f"- {err}" for err in errors])
+    st.error(f"⚠️ **Gemini API Execution Failed:**\n{error_report}")
+    return None
 
 def get_free_photo_url(title: str) -> str:
     return f"https://picsum.photos/1024/600?blur=1"
