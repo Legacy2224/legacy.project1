@@ -416,7 +416,7 @@ def generate_ai_image(prompt):
         # Native Gemini image model
         response = gemini_client.models.generate_content(
 
-            model="gemini-3.1-flash-image",
+            model="gemini-3.1-flash-lite-image",
 
             contents=prompt
         )
