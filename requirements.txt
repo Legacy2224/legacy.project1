@@ -3,3 +3,5 @@ groq
 google-genai
 gtts
 requests
+Pillow
+imageio-ffmpeg
