@@ -1,18 +1,10 @@
-import io
-import urllib.parse
-import base64
-
-import requests
 import streamlit as st
-from google import genai
+import requests
+import html
 from gtts import gTTS
-
-# Optional Groq
-try:
-    from groq import Groq
-    GROQ_AVAILABLE = True
-except ImportError:
-    GROQ_AVAILABLE = False
+from io import BytesIO
+from google import genai
+from groq import Groq
 
 
 # ============================================================
@@ -20,8 +12,8 @@ except ImportError:
 # ============================================================
 
 st.set_page_config(
-    page_title="AI Story, Photo & Video Studio",
-    page_icon="🎨",
+    page_title="Free AI Story, Photo & Video Studio",
+    page_icon="🎬",
     layout="wide"
 )
 
@@ -30,187 +22,90 @@ st.set_page_config(
 # API CLIENTS
 # ============================================================
 
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+PIXABAY_API_KEY = st.secrets.get("PIXABAY_API_KEY", "")
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+
 gemini_client = None
 groq_client = None
 
-gemini_error = None
-groq_error = None
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-
-# ---------------- GEMINI ----------------
-
-try:
-
-    if "GEMINI_API_KEY" in st.secrets:
-
-        gemini_key = str(
-            st.secrets["GEMINI_API_KEY"]
-        ).strip()
-
-        if gemini_key:
-
-            gemini_client = genai.Client(
-                api_key=gemini_key
-            )
-
-        else:
-
-            gemini_error = (
-                "GEMINI_API_KEY is empty."
-            )
-
-    else:
-
-        gemini_error = (
-            "GEMINI_API_KEY is missing."
-        )
-
-except Exception as e:
-
-    gemini_error = str(e)
-
-
-# ---------------- GROQ ----------------
-
-if GROQ_AVAILABLE:
-
-    try:
-
-        if "GROQ_API_KEY" in st.secrets:
-
-            groq_key = str(
-                st.secrets["GROQ_API_KEY"]
-            ).strip()
-
-            if groq_key:
-
-                groq_client = Groq(
-                    api_key=groq_key
-                )
-
-    except Exception as e:
-
-        groq_error = str(e)
+if GROQ_API_KEY:
+    groq_client = Groq(api_key=GROQ_API_KEY)
 
 
 # ============================================================
-# CUSTOM STYLING
+# SIDEBAR
 # ============================================================
 
-st.sidebar.title("⚙️ Custom Styling")
+with st.sidebar:
 
-bg_color = st.sidebar.color_picker(
-    "App Background",
-    "#F0F2F6"
-)
+    st.title("🎬 AI Story Studio")
 
-text_color = st.sidebar.color_picker(
-    "Text Color",
-    "#1F1F1F"
-)
+    st.markdown(
+        """
+        Create a complete story experience:
 
-card_color = st.sidebar.color_picker(
-    "Card Background",
-    "#FFFFFF"
-)
-
-st.markdown(
-    f"""
-    <style>
-
-    .stApp {{
-        background-color: {bg_color};
-        color: {text_color};
-    }}
-
-    .story-card {{
-        background-color: {card_color};
-        padding: 25px;
-        border-radius: 14px;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.10);
-        margin-bottom: 20px;
-        line-height: 1.7;
-        font-size: 17px;
-        color: {text_color};
-    }}
-
-    .media-card {{
-        background-color: {card_color};
-        padding: 20px;
-        border-radius: 14px;
-        margin-bottom: 20px;
-    }}
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.title("✨ AI Story, Photo & Video Studio")
-
-st.write(
-    "Create a story with matching AI artwork, "
-    "narration and relevant video."
-)
-
-
-# ============================================================
-# INPUT
-# ============================================================
-
-col1, col2 = st.columns([2, 1])
-
-with col1:
-
-    story_title = st.text_input(
-        "📖 Story Title",
-        placeholder="Snow White and the Seven Dwarfs"
+        ✍️ AI Story  
+        🖼️ Matching Photo  
+        🎥 Matching Video  
+        🔊 Narration
+        """
     )
 
-with col2:
+    st.divider()
+
+    st.subheader("⚙️ Settings")
 
     word_limit = st.slider(
-        "📏 Word Limit",
-        min_value=50,
-        max_value=1000,
-        value=300,
-        step=25
+        "Story length",
+        min_value=100,
+        max_value=1500,
+        value=500,
+        step=50
     )
+
+    language = st.selectbox(
+        "Narration language",
+        [
+            ("English", "en"),
+            ("Hindi", "hi"),
+            ("Spanish", "es"),
+            ("French", "fr"),
+            ("German", "de")
+        ],
+        format_func=lambda x: x[0]
+    )
+
+    st.divider()
+
+    st.caption("Media is provided by Pixabay.")
+    st.caption("Story generation uses Gemini Flash Lite.")
 
 
 # ============================================================
 # SESSION STATE
 # ============================================================
 
-defaults = {
+if "story" not in st.session_state:
+    st.session_state.story = ""
 
-    "current_story": "",
+if "story_title" not in st.session_state:
+    st.session_state.story_title = ""
 
-    "last_title": "",
+if "image_url" not in st.session_state:
+    st.session_state.image_url = None
 
-    "last_limit": 0,
+if "video_url" not in st.session_state:
+    st.session_state.video_url = None
 
-    "visual_prompt": "",
+if "audio_bytes" not in st.session_state:
+    st.session_state.audio_bytes = None
 
-    "generated_image": None,
-
-    "video_url": None,
-
-    "video_query": "",
-
-    "audio": None
-}
-
-for key, value in defaults.items():
-
-    if key not in st.session_state:
-
-        st.session_state[key] = value
+if "media_queries" not in st.session_state:
+    st.session_state.media_queries = []
 
 
 # ============================================================
@@ -220,764 +115,590 @@ for key, value in defaults.items():
 def gemini_text(prompt):
 
     if not gemini_client:
+        raise Exception("GEMINI_API_KEY is missing.")
 
-        st.error(
-            f"Gemini is not configured:\n\n{gemini_error}"
-        )
+    response = gemini_client.models.generate_content(
+        model="gemini-3.1-flash-lite",
+        contents=prompt
+    )
 
-        return None
+    if not response.text:
+        raise Exception("Gemini returned an empty response.")
 
-    try:
+    return response.text.strip()
 
-        # Lite model
-        response = gemini_client.models.generate_content(
 
-            model="gemini-3.1-flash-lite",
+# ============================================================
+# GROQ FALLBACK
+# ============================================================
 
-            contents=prompt
-        )
+def groq_text(prompt):
 
-        if response and response.text:
+    if not groq_client:
+        raise Exception("GROQ_API_KEY is missing.")
 
-            return response.text.strip()
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.8,
+        max_tokens=2500
+    )
 
-        return None
-
-    except Exception as e:
-
-        st.error(
-            f"Gemini error:\n\n{e}"
-        )
-
-        return None
+    return response.choices[0].message.content.strip()
 
 
 # ============================================================
 # STORY GENERATION
 # ============================================================
 
-def generate_story(title, limit):
+def generate_story(title, word_limit):
 
     prompt = f"""
-Write an original, engaging story titled:
+Write an engaging original story titled:
 
 "{title}"
 
 Requirements:
 
-- Stay strongly focused on the title.
-- Use specific characters.
-- Use a clear setting.
-- Include meaningful actions.
-- Include a problem or conflict.
-- Include a satisfying ending.
-- Make the story easy to visualize.
-- Avoid generic filler.
-- Target approximately {limit} words.
-- Return ONLY the story.
+- Approximately {word_limit} words
+- Strong beginning, middle and ending
+- Clear characters
+- Vivid visual descriptions
+- Suitable for a general audience
+- Natural storytelling
+- Do not explain your writing process
+- Return only the story
 
-Write the story now.
+The story should contain enough visual detail that photographs or
+stock video can later be selected to represent important scenes.
 """
 
-    return gemini_text(prompt)
+    # Try Gemini first
+    try:
+        return gemini_text(prompt), "Gemini"
+    except Exception as gemini_error:
+
+        # Groq fallback
+        if groq_client:
+            try:
+                return groq_text(prompt), "Groq"
+            except Exception:
+                pass
+
+        raise gemini_error
 
 
 # ============================================================
-# VISUAL PROMPT GENERATION
+# CREATE PIXABAY SEARCH QUERIES
 # ============================================================
 
-def create_visual_prompt(title, story):
+def create_media_queries(title, story):
 
     prompt = f"""
-You are a professional cinematic storyboard artist.
-
-STORY TITLE:
-{title}
-
-STORY:
-{story}
-
-Create ONE detailed prompt for an AI image generator.
-
-The image MUST show an actual important moment
-from the story.
-
-Do NOT create a generic landscape.
-
-The prompt must describe:
-
-- Main characters
-- Character appearance
-- Character actions
-- Location
-- Important objects
-- Time of day
-- Lighting
-- Camera angle
-- Mood
-- Cinematic composition
-- Art style
-
-The characters and their actions must be
-the main focus.
-
-Do not add text.
-
-Return ONLY the image prompt.
-"""
-
-    return gemini_text(prompt)
-
-
-# ============================================================
-# GROQ PROMPT ENHANCEMENT
-# ============================================================
-
-def improve_prompt_with_groq(title, prompt):
-
-    if not groq_client:
-
-        return prompt
-
-    try:
-
-        result = groq_client.chat.completions.create(
-
-            model="llama-3.3-70b-versatile",
-
-            messages=[
-
-                {
-                    "role": "system",
-                    "content": """
-You are an expert AI image prompt engineer.
-
-Improve the provided prompt.
-
-Keep the original story.
-
-Make the characters, actions,
-environment and composition extremely clear.
-
-Never turn the scene into a generic landscape.
-
-Return ONLY the improved image prompt.
-"""
-                },
-
-                {
-                    "role": "user",
-                    "content": f"""
-Story:
-{title}
-
-Image prompt:
-{prompt}
-"""
-                }
-
-            ],
-
-            temperature=0.3,
-
-            max_tokens=500
-        )
-
-        output = (
-            result
-            .choices[0]
-            .message
-            .content
-        )
-
-        if output:
-
-            return output.strip()
-
-    except Exception:
-
-        pass
-
-    return prompt
-
-
-# ============================================================
-# GEMINI IMAGE GENERATION
-# ============================================================
-
-def generate_ai_image(prompt):
-
-    if not gemini_client:
-
-        return None
-
-    try:
-
-        # Native Gemini image model
-        response = gemini_client.models.generate_content(
-
-            model="gemini-3.1-flash-lite-image",
-
-            contents=prompt
-        )
-
-        if not response:
-
-            return None
-
-        # Gemini returns image parts
-        if hasattr(response, "candidates"):
-
-            for candidate in response.candidates:
-
-                if not candidate.content:
-
-                    continue
-
-                for part in candidate.content.parts:
-
-                    if hasattr(part, "inline_data"):
-
-                        if part.inline_data:
-
-                            return (
-                                part.inline_data.data
-                            )
-
-    except Exception as e:
-
-        st.error(
-            f"Image generation failed:\n\n{e}"
-        )
-
-    return None
-
-
-# ============================================================
-# PIXABAY QUERY GENERATION
-# ============================================================
-
-def create_pixabay_query(title, story):
-
-    prompt = f"""
-You are selecting stock footage.
+You are selecting stock media for a story.
 
 Story title:
 {title}
 
 Story:
-{story}
+{story[:6000]}
 
-Create a short Pixabay search query.
+Create 5 short Pixabay search queries that visually represent
+the most important scenes in this story.
 
-The query must contain only 3-5
-visual keywords.
+Rules:
+- 2 to 5 words per query
+- Use concrete visual nouns
+- Include location, characters, objects or atmosphere
+- Avoid full sentences
+- Avoid abstract concepts
+- Do not use quotation marks
+- Do not number the queries
 
-Examples:
+Example:
 
-Snow White:
-enchanted forest fairy tale
-
-Space story:
-astronaut spaceship space
-
-Ocean story:
-ocean sailing boat
-
-Dragon story:
-dragon castle fantasy
-
-Do NOT return a sentence.
-
-Return ONLY the keywords.
+enchanted forest cottage
+young princess woodland
+magical forest sunrise
+fairy tale castle
+misty woodland path
 """
 
-    query = gemini_text(prompt)
-
-    if query:
-
-        query = query.replace(
-            "\n",
-            " "
-        ).strip()
-
-        return query[:100]
-
-    return title
-
-
-# ============================================================
-# PIXABAY VIDEO
-# ============================================================
-
-def get_pixabay_video(title, story):
-
-    if "PIXABAY_API_KEY" not in st.secrets:
-
-        return None, "PIXABAY_API_KEY is missing."
-
-    api_key = str(
-        st.secrets["PIXABAY_API_KEY"]
-    ).strip()
-
-    if not api_key:
-
-        return None, "PIXABAY_API_KEY is empty."
-
-    query = create_pixabay_query(
-        title,
-        story
-    )
-
-    url = "https://pixabay.com/api/videos/"
-
-    params = {
-
-        "key": api_key,
-
-        "q": query,
-
-        "video_type": "film",
-
-        "per_page": 10,
-
-        "safesearch": "true"
-    }
-
     try:
+        result = gemini_text(prompt)
 
-        response = requests.get(
-            url,
-            params=params,
-            timeout=10
-        )
+        queries = []
 
-        if response.status_code != 200:
+        for line in result.splitlines():
 
-            return (
-                None,
-                f"Pixabay HTTP {response.status_code}"
-            )
+            line = line.strip()
 
-        data = response.json()
+            if not line:
+                continue
 
-        hits = data.get(
-            "hits",
-            []
-        )
+            # Remove bullets/numbers
+            line = line.lstrip("-•*0123456789. ")
 
-        if not hits:
+            if line:
+                queries.append(line)
 
-            return (
-                None,
-                f"No matching video found for: {query}"
-            )
+        return queries[:5]
 
-        for hit in hits:
+    except Exception:
 
-            videos = hit.get(
-                "videos",
-                {}
-            )
+        # Simple fallback based on title
+        cleaned_title = title.strip()
 
-            for quality in [
-                "large",
-                "medium",
-                "small"
-            ]:
-
-                if quality in videos:
-
-                    video_url = videos[
-                        quality
-                    ].get("url")
-
-                    if video_url:
-
-                        return (
-                            video_url,
-                            query
-                        )
-
-        return (
-            None,
-            "No usable video found."
-        )
-
-    except Exception as e:
-
-        return None, str(e)
+        return [
+            cleaned_title,
+            f"{cleaned_title} fantasy",
+            f"{cleaned_title} forest",
+            f"{cleaned_title} story",
+        ]
 
 
 # ============================================================
-# AUDIO
+# PIXABAY IMAGE SEARCH
 # ============================================================
 
-def generate_audio(text):
+def search_pixabay_image(queries):
 
-    try:
-
-        tts = gTTS(
-            text=text,
-            lang="en"
-        )
-
-        buffer = io.BytesIO()
-
-        tts.write_to_fp(
-            buffer
-        )
-
-        buffer.seek(0)
-
-        return buffer
-
-    except Exception as e:
-
-        st.error(
-            f"Audio error: {e}"
-        )
-
+    if not PIXABAY_API_KEY:
         return None
 
+    endpoint = "https://pixabay.com/api/"
 
-# ============================================================
-# GENERATE STORY BUTTON
-# ============================================================
+    for query in queries:
 
-if story_title:
+        try:
 
-    if st.button(
-        "✨ Generate Story",
-        type="primary",
-        use_container_width=True
-    ):
+            params = {
+                "key": PIXABAY_API_KEY,
+                "q": query,
+                "image_type": "photo",
+                "orientation": "horizontal",
+                "safesearch": "true",
+                "per_page": 10
+            }
 
-        # Clear previous content
-        st.session_state.current_story = ""
-        st.session_state.visual_prompt = ""
-        st.session_state.generated_image = None
-        st.session_state.video_url = None
-        st.session_state.video_query = ""
-        st.session_state.audio = None
-
-        with st.spinner(
-            "🧠 Writing your story..."
-        ):
-
-            story = generate_story(
-                story_title,
-                word_limit
+            response = requests.get(
+                endpoint,
+                params=params,
+                timeout=15
             )
 
-        if story:
+            response.raise_for_status()
 
-            st.session_state.current_story = story
+            data = response.json()
 
-            st.session_state.last_title = story_title
+            hits = data.get("hits", [])
 
-            st.session_state.last_limit = word_limit
+            if hits:
 
-            st.success(
-                "✅ Story generated!"
+                # Prefer large image
+                for hit in hits:
+
+                    url = (
+                        hit.get("largeImageURL")
+                        or hit.get("webformatURL")
+                    )
+
+                    if url:
+                        return url
+
+        except Exception:
+            continue
+
+    return None
+
+
+# ============================================================
+# PIXABAY VIDEO SEARCH
+# ============================================================
+
+def search_pixabay_video(queries):
+
+    if not PIXABAY_API_KEY:
+        return None
+
+    endpoint = "https://pixabay.com/api/videos/"
+
+    for query in queries:
+
+        try:
+
+            params = {
+                "key": PIXABAY_API_KEY,
+                "q": query,
+                "video_type": "film",
+                "safesearch": "true",
+                "per_page": 10
+            }
+
+            response = requests.get(
+                endpoint,
+                params=params,
+                timeout=15
             )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+            hits = data.get("hits", [])
+
+            if hits:
+
+                for hit in hits:
+
+                    videos = hit.get("videos", {})
+
+                    # Prefer larger video
+                    for quality in ["large", "medium", "small", "tiny"]:
+
+                        if quality in videos:
+
+                            url = videos[quality].get("url")
+
+                            if url:
+                                return url
+
+        except Exception:
+            continue
+
+    return None
+
+
+# ============================================================
+# NARRATION
+# ============================================================
+
+def generate_audio(text, language_code):
+
+    audio = BytesIO()
+
+    tts = gTTS(
+        text=text,
+        lang=language_code,
+        slow=False
+    )
+
+    tts.write_to_fp(audio)
+
+    audio.seek(0)
+
+    return audio.read()
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.title("🎬 Free AI Story, Photo & Video Studio")
+
+st.markdown(
+    "Create a story, find matching visuals, and turn it into narration."
+)
+
+st.divider()
+
+
+# ============================================================
+# STORY INPUT
+# ============================================================
+
+title = st.text_input(
+    "📖 Story title",
+    placeholder="Example: Snow White and the Seven Dwarfs"
+)
+
+
+# ============================================================
+# GENERATE STORY
+# ============================================================
+
+if st.button(
+    "✨ Generate Story",
+    type="primary",
+    use_container_width=True
+):
+
+    if not title.strip():
+
+        st.warning("Please enter a story title.")
+
+    else:
+
+        with st.spinner("✍️ Writing your story..."):
+
+            try:
+
+                story, provider = generate_story(
+                    title,
+                    word_limit
+                )
+
+                st.session_state.story = story
+                st.session_state.story_title = title
+
+                # Clear old media
+                st.session_state.image_url = None
+                st.session_state.video_url = None
+                st.session_state.audio_bytes = None
+                st.session_state.media_queries = []
+
+                st.success(
+                    f"Story generated using {provider}."
+                )
+
+            except Exception as e:
+
+                st.error(
+                    f"Story generation failed:\n\n{e}"
+                )
 
 
 # ============================================================
 # DISPLAY STORY
 # ============================================================
 
-if st.session_state.current_story:
+if st.session_state.story:
 
-    story = st.session_state.current_story
+    st.divider()
 
     st.subheader(
-        f"📖 {story_title}"
+        f"📖 {st.session_state.story_title}"
     )
 
-    actual_words = len(
-        story.split()
+    # Escape HTML so story text cannot accidentally
+    # break the page layout.
+    safe_story = html.escape(
+        st.session_state.story
     )
 
     st.markdown(
         f"""
-        <div class="story-card">
-        {story}
+        <div style="
+            padding: 25px;
+            border-radius: 15px;
+            background: rgba(128,128,128,0.10);
+            line-height: 1.8;
+            font-size: 17px;
+        ">
+        {safe_story.replace(chr(10), '<br>')}
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    st.caption(
-        f"📊 {actual_words} words "
-        f"(target: {word_limit})"
-    )
-
-
-    # ========================================================
-    # MEDIA STUDIO
-    # ========================================================
-
-    st.write("---")
-
-    st.header(
-        "🎬 Visual & Media Studio"
-    )
-
-
-    # ========================================================
-    # CREATE SCENE
-    # ========================================================
-
-    if st.button(
-        "🧠 Create Visual Scene",
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "🎨 Creating a scene from your story..."
-        ):
-
-            prompt = create_visual_prompt(
-                story_title,
-                story
-            )
-
-        if prompt:
-
-            with st.spinner(
-                "✨ Improving visual details..."
-            ):
-
-                prompt = improve_prompt_with_groq(
-                    story_title,
-                    prompt
-                )
-
-            st.session_state.visual_prompt = prompt
-
-            st.success(
-                "Scene prompt created!"
-            )
-
-
-    if st.session_state.visual_prompt:
-
-        with st.expander(
-            "🔍 View Visual Prompt"
-        ):
-
-            st.write(
-                st.session_state.visual_prompt
-            )
-
+    st.divider()
 
     # ========================================================
     # MEDIA BUTTONS
     # ========================================================
 
-    image_col, video_col = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # IMAGE
-    # ========================================================
+    # --------------------------------------------------------
 
-    with image_col:
+    with col1:
 
         if st.button(
-            "🖼️ Generate AI Picture",
+            "🖼️ Find Matching Photo",
             use_container_width=True
         ):
 
-            if not st.session_state.visual_prompt:
+            with st.spinner("🔎 Finding matching photo..."):
 
-                with st.spinner(
-                    "🧠 Creating visual scene..."
-                ):
+                try:
 
-                    prompt = create_visual_prompt(
-                        story_title,
-                        story
+                    queries = create_media_queries(
+                        st.session_state.story_title,
+                        st.session_state.story
                     )
 
-                    prompt = improve_prompt_with_groq(
-                        story_title,
-                        prompt
+                    st.session_state.media_queries = queries
+
+                    image_url = search_pixabay_image(
+                        queries
                     )
 
-                    st.session_state.visual_prompt = prompt
+                    if image_url:
 
-            with st.spinner(
-                "🎨 Generating story artwork..."
-            ):
+                        st.session_state.image_url = image_url
 
-                image = generate_ai_image(
-                    st.session_state.visual_prompt
-                )
+                        st.success("Matching photo found!")
 
-            if image:
+                    else:
 
-                st.session_state.generated_image = image
+                        st.warning(
+                            "Pixabay could not find a suitable photo."
+                        )
 
-                st.success(
-                    "✅ AI artwork generated!"
-                )
+                except Exception as e:
 
+                    st.error(
+                        f"Photo search failed: {e}"
+                    )
 
-    # ========================================================
+    # --------------------------------------------------------
     # VIDEO
-    # ========================================================
+    # --------------------------------------------------------
 
-    with video_col:
+    with col2:
 
         if st.button(
             "🎥 Find Matching Video",
             use_container_width=True
         ):
 
-            with st.spinner(
-                "🔎 Searching Pixabay..."
-            ):
+            with st.spinner("🔎 Finding matching video..."):
 
-                video, query = get_pixabay_video(
-                    story_title,
-                    story
-                )
+                try:
 
-            if video:
+                    # Reuse queries if they already exist
+                    if not st.session_state.media_queries:
 
-                st.session_state.video_url = video
+                        queries = create_media_queries(
+                            st.session_state.story_title,
+                            st.session_state.story
+                        )
 
-                st.session_state.video_query = query
+                        st.session_state.media_queries = queries
 
-                st.success(
-                    f"Found footage for: {query}"
-                )
+                    video_url = search_pixabay_video(
+                        st.session_state.media_queries
+                    )
 
-            else:
+                    if video_url:
 
-                st.session_state.video_url = None
+                        st.session_state.video_url = video_url
 
-                st.warning(
-                    query
-                )
+                        st.success("Matching video found!")
 
+                    else:
 
-    # ========================================================
-    # SHOW IMAGE
-    # ========================================================
+                        st.warning(
+                            "Pixabay could not find a suitable video."
+                        )
 
-    if st.session_state.generated_image:
+                except Exception as e:
 
-        st.write(
-            "### 🖼️ Story Artwork"
-        )
+                    st.error(
+                        f"Video search failed: {e}"
+                    )
 
-        st.image(
-            st.session_state.generated_image,
-            caption=story_title,
-            use_container_width=True
-        )
-
-
-    # ========================================================
-    # SHOW VIDEO
-    # ========================================================
-
-    if st.session_state.video_url:
-
-        st.write(
-            "### 🎥 Matching Video"
-        )
-
-        st.caption(
-            "Pixabay search: "
-            + st.session_state.video_query
-        )
-
-        st.video(
-            st.session_state.video_url
-        )
-
-
-    # ========================================================
+    # --------------------------------------------------------
     # AUDIO
-    # ========================================================
+    # --------------------------------------------------------
 
-    st.write("---")
+    with col3:
 
-    st.subheader(
-        "🔊 Story Narration"
-    )
-
-    if st.button(
-        "🔊 Generate Narration",
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "🎙️ Creating narration..."
+        if st.button(
+            "🔊 Generate Narration",
+            use_container_width=True
         ):
 
-            audio = generate_audio(
-                story
-            )
+            with st.spinner("🎙️ Creating narration..."):
 
-        if audio:
+                try:
 
-            st.session_state.audio = audio
+                    audio = generate_audio(
+                        st.session_state.story,
+                        language[1]
+                    )
 
-    if st.session_state.audio:
+                    st.session_state.audio_bytes = audio
 
-        st.audio(
-            st.session_state.audio,
-            format="audio/mp3"
+                    st.success("Narration ready!")
+
+                except Exception as e:
+
+                    st.error(
+                        f"Audio generation failed: {e}"
+                    )
+
+
+# ============================================================
+# IMAGE DISPLAY
+# ============================================================
+
+if st.session_state.image_url:
+
+    st.divider()
+
+    st.subheader("🖼️ Story Photo")
+
+    st.image(
+        st.session_state.image_url,
+        use_container_width=True
+    )
+
+
+# ============================================================
+# VIDEO DISPLAY
+# ============================================================
+
+if st.session_state.video_url:
+
+    st.divider()
+
+    st.subheader("🎥 Story Video")
+
+    st.video(
+        st.session_state.video_url
+    )
+
+
+# ============================================================
+# AUDIO DISPLAY
+# ============================================================
+
+if st.session_state.audio_bytes:
+
+    st.divider()
+
+    st.subheader("🔊 Story Narration")
+
+    st.audio(
+        st.session_state.audio_bytes,
+        format="audio/mp3"
+    )
+
+    st.download_button(
+        "⬇️ Download Narration",
+        data=st.session_state.audio_bytes,
+        file_name="story_narration.mp3",
+        mime="audio/mp3"
+    )
+
+
+# ============================================================
+# DEBUG / SEARCH TERMS
+# ============================================================
+
+if st.session_state.media_queries:
+
+    with st.expander("🔎 Visual search terms"):
+
+        st.write(
+            st.session_state.media_queries
         )
 
 
 # ============================================================
-# SIDEBAR STATUS
+# FOOTER
 # ============================================================
 
-st.sidebar.write("---")
+st.divider()
 
-st.sidebar.subheader(
-    "🔌 API Status"
+st.caption(
+    "AI Story • Pixabay Photo • Pixabay Video • gTTS Narration"
 )
-
-if gemini_client:
-
-    st.sidebar.success(
-        "🟢 Gemini connected"
-    )
-
-else:
-
-    st.sidebar.error(
-        "🔴 Gemini unavailable"
-    )
-
-if groq_client:
-
-    st.sidebar.success(
-        "🟢 Groq connected"
-    )
-
-else:
-
-    st.sidebar.info(
-        "⚪ Groq not connected"
-    )
-
-if "PIXABAY_API_KEY" in st.secrets:
-
-    st.sidebar.success(
-        "🟢 Pixabay connected"
-    )
-
-else:
-
-    st.sidebar.warning(
-        "🟡 Pixabay not configured"
-    )
