@@ -109,9 +109,9 @@ def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
             "Write clear, vivid, cinematic sentences."
         )
         
-        # Using Llama 3.1 8B on Groq (Fast & Free)
+        # Using Llama-3-8b-8192 on Groq (Active and Free)
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama3-8b-8192",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Write the story for '{prompt}'."}
