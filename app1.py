@@ -98,8 +98,25 @@ if groq_api_key and hf_token:
 # ---------------------------------------------------------
 # AI Inference Helper Functions
 # ---------------------------------------------------------
+def get_active_groq_models(client: Groq) -> list:
+    """Dynamically fetches active text models from Groq to prevent deprecation errors."""
+    try:
+        models_data = client.models.list()
+        # Exclude audio/whisper or vision-only models
+        active_models = [
+            m.id for m in models_data.data 
+            if "whisper" not in m.id.lower() and "safetensors" not in m.id.lower()
+        ]
+        if active_models:
+            return active_models
+    except Exception:
+        pass
+    
+    # Fallback list if fetching model list fails
+    return ["llama-3.3-70b-versatile", "llama3-70b-8192"]
+
 def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
-    """Generates a story using Groq with active production models."""
+    """Generates a story using Groq with dynamic active model discovery."""
     client = Groq(api_key=api_key)
     
     system_prompt = (
@@ -108,13 +125,8 @@ def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
         "Write clear, vivid, cinematic sentences."
     )
     
-    # Active production models currently supported on Groq
-    models_to_try = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768"
-    ]
-
+    # Dynamically retrieve currently active models
+    models_to_try = get_active_groq_models(client)
     last_error = None
 
     for model in models_to_try:
