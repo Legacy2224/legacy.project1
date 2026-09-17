@@ -99,31 +99,40 @@ if groq_api_key and hf_token:
 # AI Inference Helper Functions
 # ---------------------------------------------------------
 def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
-    """Generates a story using Groq's high-speed free tier API."""
-    try:
-        client = Groq(api_key=api_key)
-        
-        system_prompt = (
-            f"You are a creative storyteller. Write a narrative story based on '{prompt}'. "
-            f"Keep the total length to approximately {max_words} words. "
-            "Write clear, vivid, cinematic sentences."
-        )
-        
-        # Using Llama-3-8b-8192 on Groq (Active and Free)
-        response = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Write the story for '{prompt}'."}
-            ],
-            max_tokens=max_words * 3,
-            temperature=0.7
-        )
-        
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        st.error(f"Text Generation Error (Groq): {e}")
-        return None
+    """Generates a story using Groq with multi-model fallback support."""
+    client = Groq(api_key=api_key)
+    
+    system_prompt = (
+        f"You are a creative storyteller. Write a narrative story based on '{prompt}'. "
+        f"Keep the total length to approximately {max_words} words. "
+        "Write clear, vivid, cinematic sentences."
+    )
+    
+    # Priority list of supported Groq models
+    models_to_try = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768"
+    ]
+
+    for model in models_to_try:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Write the story for '{prompt}'."}
+                ],
+                max_tokens=max_words * 3,
+                temperature=0.7
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            # If a model fails, try the next one in the list
+            continue
+
+    st.error("Text Generation Error: All Groq models failed to respond. Please check your API key.")
+    return None
 
 def generate_ai_image(prompt: str, api_key: str) -> Image.Image:
     """Generates visual artwork using Stable Diffusion XL via Hugging Face."""
