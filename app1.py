@@ -91,7 +91,7 @@ else:
 # AI Inference Helper Functions
 # ---------------------------------------------------------
 def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
-    """Generates a structured story using Hugging Face's Chat Completion API."""
+    """Generates a structured story using an open-access model on Hugging Face."""
     try:
         client = InferenceClient(api_key=api_key)
         
@@ -110,8 +110,9 @@ def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
             }
         ]
         
+        # Using Qwen2.5-Coder-32B-Instruct (open-access serverless inference model)
         response = client.chat.completions.create(
-            model="meta-llama/Llama-3.2-3B-Instruct",
+            model="Qwen/Qwen2.5-Coder-32B-Instruct",
             messages=messages,
             max_tokens=max_words * 3,
             temperature=0.7
