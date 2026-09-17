@@ -4,6 +4,7 @@ import io
 import time
 from PIL import Image
 from gtts import gTTS
+from groq import Groq
 from huggingface_hub import InferenceClient
 
 # ---------------------------------------------------------
@@ -68,83 +69,76 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# API Key Handling (Secrets + Sidebar Fallback)
+# API Keys Handling (Secrets + Sidebar Fallbacks)
 # ---------------------------------------------------------
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 API Configuration")
 
-hf_token = None
+# 1. Groq API Key (For Text)
+groq_api_key = st.secrets.get("GROQ_API_KEY") if "GROQ_API_KEY" in st.secrets else None
+if not groq_api_key:
+    groq_api_key = st.sidebar.text_input(
+        "Groq API Key (Text Gen)", 
+        type="password", 
+        help="Get a free key at https://console.groq.com/keys"
+    )
 
-# 1. Attempt to load from Streamlit Secrets
-if "HF_TOKEN" in st.secrets:
-    hf_token = st.secrets["HF_TOKEN"]
-    st.sidebar.success("API Key loaded from Secrets!")
-else:
-    # 2. Fallback to manual sidebar text input
+# 2. Hugging Face Token (For Images)
+hf_token = st.secrets.get("HF_TOKEN") if "HF_TOKEN" in st.secrets else None
+if not hf_token:
     hf_token = st.sidebar.text_input(
-        "Hugging Face Token", 
+        "Hugging Face Token (Image Gen)", 
         type="password", 
         help="Get a free token at https://huggingface.co/settings/tokens"
     )
+
+if groq_api_key and hf_token:
+    st.sidebar.success("API Keys Loaded!")
 
 # ---------------------------------------------------------
 # AI Inference Helper Functions
 # ---------------------------------------------------------
 def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
-    """Generates a structured story using an open-access model on Hugging Face."""
+    """Generates a story using Groq's high-speed free tier API."""
     try:
-        client = InferenceClient(api_key=api_key)
+        client = Groq(api_key=api_key)
         
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    f"You are a creative storyteller. Write a narrative story based on '{prompt}'. "
-                    f"Keep the total length to approximately {max_words} words. "
-                    "Write clear, vivid, cinematic sentences."
-                )
-            },
-            {
-                "role": "user",
-                "content": f"Write the story for '{prompt}'."
-            }
-        ]
+        system_prompt = (
+            f"You are a creative storyteller. Write a narrative story based on '{prompt}'. "
+            f"Keep the total length to approximately {max_words} words. "
+            "Write clear, vivid, cinematic sentences."
+        )
         
-        # Using Qwen2.5-Coder-32B-Instruct (open-access serverless inference model)
+        # Using Llama 3.1 8B on Groq (Fast & Free)
         response = client.chat.completions.create(
-            model="Qwen/Qwen2.5-Coder-32B-Instruct",
-            messages=messages,
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Write the story for '{prompt}'."}
+            ],
             max_tokens=max_words * 3,
             temperature=0.7
         )
         
         return response.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"Text Generation Error: {e}")
+        st.error(f"Text Generation Error (Groq): {e}")
         return None
 
 def generate_ai_image(prompt: str, api_key: str) -> Image.Image:
-    """Generates visual artwork using FLUX / Stable Diffusion via Hugging Face."""
+    """Generates visual artwork using Stable Diffusion XL via Hugging Face."""
     try:
         client = InferenceClient(api_key=api_key)
         enhanced_prompt = f"Digital illustration artwork of {prompt}, fairytale aesthetic, high quality, vibrant"
+        
         image = client.text_to_image(
             enhanced_prompt,
-            model="black-forest-labs/FLUX.1-dev"
+            model="stabilityai/stable-diffusion-xl-base-1.0"
         )
         return image
     except Exception as e:
-        # Fallback to SDXL if FLUX is busy
-        try:
-            client = InferenceClient(api_key=api_key)
-            image = client.text_to_image(
-                prompt,
-                model="stabilityai/stable-diffusion-xl-base-1.0"
-            )
-            return image
-        except Exception as inner_e:
-            st.error(f"Image Generation Error: {inner_e}")
-            return None
+        st.error(f"Image Generation Error: {e}")
+        return None
 
 def create_voiceover(text: str) -> io.BytesIO:
     """Generates voice audio for a line of text using gTTS."""
@@ -179,12 +173,12 @@ generate_btn = st.button("🚀 Generate Studio Content", type="primary", use_con
 # Execution Logic
 # ---------------------------------------------------------
 if generate_btn:
-    if not hf_token:
-        st.warning("Please configure your Hugging Face API Token in secrets or the sidebar to proceed.")
+    if not groq_api_key or not hf_token:
+        st.warning("Please configure both Groq API Key and Hugging Face Token in secrets or the sidebar.")
         st.stop()
 
     with st.spinner("Writing story narrative..."):
-        story_text = generate_ai_story(story_title, word_limit, hf_token)
+        story_text = generate_ai_story(story_title, word_limit, groq_api_key)
 
     if story_text:
         # Save to session state
