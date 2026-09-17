@@ -1,7 +1,5 @@
 streamlit
-groq
 google-genai
-gtts
+groq
 requests
 Pillow
-imageio-ffmpeg
