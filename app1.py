@@ -1,20 +1,14 @@
-import streamlit as st
-import requests
-import html
-import json
-import re
 import os
-import tempfile
-import subprocess
-import shutil
-from io import BytesIO
+import io
+import json
+import requests
+import streamlit as st
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
-from gtts import gTTS
+from PIL import Image
+from io import BytesIO
 
 from google import genai
 from groq import Groq
-import imageio_ffmpeg
 
 
 # ============================================================
@@ -22,159 +16,46 @@ import imageio_ffmpeg
 # ============================================================
 
 st.set_page_config(
-    page_title="Free AI Story, Photo & Video Studio",
-    page_icon="🎬",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="AI Story Image Generator",
+    page_icon="🎨",
+    layout="wide"
 )
 
 
 # ============================================================
-# API KEYS
+# API KEY LOADER
 # ============================================================
 
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-PIXABAY_API_KEY = st.secrets.get("PIXABAY_API_KEY", "")
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+def get_secret(name):
+
+    # Streamlit Cloud secrets
+    try:
+        if name in st.secrets:
+            return st.secrets[name]
+    except Exception:
+        pass
+
+    # Local environment variables
+    value = os.getenv(name)
+
+    if value:
+        return value
+
+    return None
 
 
-# ============================================================
-# CLIENTS
-# ============================================================
+GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
+GROQ_API_KEY = get_secret("GROQ_API_KEY")
+PIXABAY_API_KEY = get_secret("PIXABAY_API_KEY")
 
-gemini_client = None
-groq_client = None
+# Your actual image-generation API
+IMAGE_GENERATION_API_URL = get_secret(
+    "IMAGE_GENERATION_API_URL"
+)
 
-if GEMINI_API_KEY:
-    gemini_client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
-
-if GROQ_API_KEY:
-    groq_client = Groq(
-        api_key=GROQ_API_KEY
-    )
-
-
-# ============================================================
-# SESSION STATE
-# ============================================================
-
-defaults = {
-    "story": "",
-    "story_title": "",
-    "provider": "",
-    "scenes": [],
-    "scene_images": [],
-    "scene_videos": [],
-    "poster_bytes": None,
-    "video_bytes": None,
-    "audio_bytes": None,
-    "video_path": None,
-}
-
-for key, value in defaults.items():
-
-    if key not in st.session_state:
-        st.session_state[key] = value
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown(
-        """
-        <div style="
-            text-align:center;
-            padding:10px 0 20px 0;
-        ">
-            <div style="font-size:42px;">🎬</div>
-            <h2 style="margin:0;">AI Story Studio</h2>
-            <p style="opacity:0.7;">
-                Story → Scenes → Photo → Video → Voice
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.divider()
-
-    st.subheader("🎨 Studio Colours")
-
-    primary_color = st.color_picker(
-        "Primary colour",
-        "#7C3AED"
-    )
-
-    background_color = st.color_picker(
-        "Background colour",
-        "#0E1117"
-    )
-
-    card_color = st.color_picker(
-        "Card colour",
-        "#171B24"
-    )
-
-    text_color = st.color_picker(
-        "Text colour",
-        "#FFFFFF"
-    )
-
-    accent_color = st.color_picker(
-        "Accent colour",
-        "#22C55E"
-    )
-
-    st.divider()
-
-    st.subheader("⚙️ Story Settings")
-
-    word_limit = st.slider(
-        "Story length",
-        min_value=150,
-        max_value=2000,
-        value=700,
-        step=50
-    )
-
-    language = st.selectbox(
-        "Narration language",
-        [
-            ("English", "en"),
-            ("Hindi", "hi"),
-            ("Spanish", "es"),
-            ("French", "fr"),
-            ("German", "de")
-        ],
-        format_func=lambda x: x[0]
-    )
-
-    scene_count = st.slider(
-        "Video scenes",
-        min_value=4,
-        max_value=8,
-        value=6
-    )
-
-    clip_duration = st.slider(
-        "Seconds per scene",
-        min_value=3,
-        max_value=8,
-        value=5
-    )
-
-    st.divider()
-
-    st.info(
-        "The free version creates a cinematic composite "
-        "poster from story-specific Pixabay images and "
-        "builds a multi-scene video from different Pixabay clips."
-    )
+IMAGE_GENERATION_API_KEY = get_secret(
+    "IMAGE_GENERATION_API_KEY"
+)
 
 
 # ============================================================
@@ -182,67 +63,28 @@ with st.sidebar:
 # ============================================================
 
 st.markdown(
-    f"""
+    """
     <style>
 
-    .stApp {{
-        background-color: {background_color};
-        color: {text_color};
-    }}
-
-    [data-testid="stSidebar"] {{
-        background-color: {card_color};
-    }}
-
-    .main-title {{
-        font-size: 42px;
+    .main-title {
+        font-size: 45px;
         font-weight: 800;
-        color: {text_color};
-        margin-bottom: 5px;
-    }}
-
-    .subtitle {{
-        color: rgba(255,255,255,0.65);
-        font-size: 17px;
-        margin-bottom: 25px;
-    }}
-
-    .story-card {{
-        background: {card_color};
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 18px;
-        padding: 28px;
-        line-height: 1.85;
-        font-size: 17px;
-        margin-top: 15px;
-    }}
-
-    .scene-card {{
-        background: {card_color};
-        border-radius: 15px;
-        padding: 18px;
-        margin-bottom: 15px;
-        border-left: 4px solid {primary_color};
-    }}
-
-    .feature-card {{
-        background: {card_color};
-        border-radius: 16px;
-        padding: 22px;
         text-align: center;
-        border: 1px solid rgba(255,255,255,0.08);
-    }}
+        margin-bottom: 5px;
+    }
 
-    div.stButton > button {{
-        border-radius: 12px;
-        border: 1px solid {primary_color};
+    .subtitle {
+        text-align: center;
+        color: #777;
+        font-size: 18px;
+        margin-bottom: 30px;
+    }
+
+    .stButton button {
+        width: 100%;
+        border-radius: 10px;
         font-weight: 600;
-    }}
-
-    div.stButton > button:hover {{
-        border-color: {accent_color};
-        color: {accent_color};
-    }}
+    }
 
     </style>
     """,
@@ -255,1521 +97,780 @@ st.markdown(
 # ============================================================
 
 st.markdown(
-    '<div class="main-title">🎬 Free AI Story, Photo & Video Studio</div>',
+    '<div class="main-title">🎨 AI Story Image Generator</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
     '<div class="subtitle">'
-    'Create an original story and automatically turn it into a '
-    'visual multi-scene experience.'
+    'Transform your story into a cinematic AI image'
     '</div>',
     unsafe_allow_html=True
 )
 
 
 # ============================================================
-# GEMINI TEXT
+# SIDEBAR
 # ============================================================
 
-def gemini_text(prompt):
+with st.sidebar:
 
-    if not gemini_client:
+    st.header("⚙️ Generation Settings")
+
+    style = st.selectbox(
+        "🎨 Visual Style",
+        [
+            "Cinematic",
+            "Photorealistic",
+            "3D Animation",
+            "Anime",
+            "Digital Art",
+            "Fantasy",
+            "Cyberpunk",
+            "Watercolor",
+            "Oil Painting",
+            "Comic Book",
+            "Studio Ghibli Inspired",
+            "Dark Fantasy",
+            "Sci-Fi"
+        ]
+    )
+
+    aspect_ratio = st.selectbox(
+        "📐 Aspect Ratio",
+        [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4"
+        ]
+    )
+
+    lighting = st.selectbox(
+        "💡 Lighting",
+        [
+            "Cinematic lighting",
+            "Golden hour",
+            "Soft natural light",
+            "Dramatic lighting",
+            "Neon lighting",
+            "Moonlight",
+            "Volumetric lighting",
+            "Studio lighting"
+        ]
+    )
+
+    camera = st.selectbox(
+        "📷 Camera",
+        [
+            "Wide cinematic shot",
+            "Medium shot",
+            "Close-up",
+            "Extreme close-up",
+            "Low angle",
+            "High angle",
+            "Drone view",
+            "Over-the-shoulder"
+        ]
+    )
+
+    use_groq = st.checkbox(
+        "✨ Enhance prompt with Groq",
+        value=True
+    )
+
+    use_pixabay = st.checkbox(
+        "🖼️ Find Pixabay references",
+        value=True
+    )
+
+
+# ============================================================
+# STORY INPUT
+# ============================================================
+
+st.subheader("📖 Describe Your Story")
+
+story = st.text_area(
+    "Enter your story or scene",
+    height=220,
+    placeholder="""
+Example:
+
+A young explorer walks into an ancient magical forest at night.
+The trees glow blue and thousands of butterflies surround her.
+As she touches an ancient crystal, the entire forest slowly
+changes from blue to purple. A giant glowing portal appears
+behind the trees.
+"""
+)
+
+
+# ============================================================
+# OPTIONAL CHARACTER DETAILS
+# ============================================================
+
+with st.expander("👤 Optional Character Details"):
+
+    character = st.text_area(
+        "Character description",
+        placeholder=(
+            "Example: 20-year-old female explorer, "
+            "long dark hair, brown leather jacket, "
+            "backpack, adventurous expression"
+        ),
+        height=120
+    )
+
+
+# ============================================================
+# GEMINI
+# ============================================================
+
+def generate_gemini_prompt(
+    story,
+    style,
+    aspect_ratio,
+    lighting,
+    camera,
+    character
+):
+
+    if not GEMINI_API_KEY:
+
         raise Exception(
             "GEMINI_API_KEY is missing."
         )
 
-    response = gemini_client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        contents=prompt
+    client = genai.Client(
+        api_key=GEMINI_API_KEY
     )
 
-    if not response.text:
-        raise Exception(
-            "Gemini returned an empty response."
-        )
+    instruction = f"""
+You are an expert cinematic AI image prompt engineer.
 
-    return response.text.strip()
+Your job is to understand a story and convert it into
+an extremely detailed image-generation prompt.
+
+STORY:
+{story}
+
+CHARACTER DETAILS:
+{character}
+
+STYLE:
+{style}
+
+ASPECT RATIO:
+{aspect_ratio}
+
+LIGHTING:
+{lighting}
+
+CAMERA:
+{camera}
+
+IMPORTANT:
+
+Analyze the story carefully.
+
+The generated image must visually represent the story.
+
+Include:
+
+1. Main subject
+2. Character appearance
+3. Character clothing
+4. Facial expression
+5. Environment
+6. Background
+7. Important objects
+8. Colors
+9. Lighting
+10. Camera angle
+11. Composition
+12. Depth
+13. Atmosphere
+14. Emotion
+15. Visual effects
+16. Motion where appropriate
+17. Story-specific details
+
+If the story contains:
+- transformation
+- color changing
+- magical effects
+- environmental changes
+- glowing objects
+- multiple important objects
+
+make those elements extremely clear.
+
+DO NOT add unrelated elements.
+
+DO NOT create text.
+
+DO NOT create logos.
+
+DO NOT create watermarks.
+
+Make the scene innovative, cinematic and visually impressive.
+
+Return ONLY valid JSON:
+
+{{
+    "title": "short title",
+    "prompt": "complete image generation prompt",
+    "negative_prompt": "negative prompt"
+}}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=instruction
+    )
+
+    text = response.text.strip()
+
+    text = text.replace(
+        "```json",
+        ""
+    )
+
+    text = text.replace(
+        "```",
+        ""
+    )
+
+    text = text.strip()
+
+    try:
+
+        return json.loads(text)
+
+    except Exception:
+
+        return {
+            "title": "AI Generated Scene",
+            "prompt": text,
+            "negative_prompt": (
+                "blurry, low quality, distorted face, "
+                "extra limbs, extra fingers, duplicate objects, "
+                "bad anatomy, text, logo, watermark"
+            )
+        }
 
 
 # ============================================================
-# GROQ FALLBACK
+# GROQ
 # ============================================================
 
-def groq_text(prompt):
+def enhance_with_groq(
+    prompt,
+    negative_prompt
+):
 
-    if not groq_client:
-        raise Exception(
-            "GROQ_API_KEY is missing."
-        )
+    if not GROQ_API_KEY:
 
-    response = groq_client.chat.completions.create(
+        return {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt
+        }
+
+    client = Groq(
+        api_key=GROQ_API_KEY
+    )
+
+    instruction = f"""
+You are a professional cinematic image prompt editor.
+
+Improve this image prompt while preserving the original story.
+
+IMAGE PROMPT:
+
+{prompt}
+
+NEGATIVE PROMPT:
+
+{negative_prompt}
+
+Improve:
+
+- cinematic composition
+- visual storytelling
+- realism
+- depth
+- lighting
+- environment
+- character consistency
+- object consistency
+- color accuracy
+- atmosphere
+- camera direction
+- visual effects
+
+If the story includes color transformation,
+make the transformation visually obvious.
+
+Do NOT change the story.
+
+Do NOT add unrelated objects.
+
+Return ONLY JSON:
+
+{{
+    "prompt": "improved image prompt",
+    "negative_prompt": "improved negative prompt"
+}}
+"""
+
+    response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
                 "role": "user",
-                "content": prompt
+                "content": instruction
             }
         ],
-        temperature=0.8,
-        max_tokens=5000
+        temperature=0.35
     )
 
-    return response.choices[0].message.content.strip()
+    text = response.choices[
+        0
+    ].message.content.strip()
 
+    text = text.replace(
+        "```json",
+        ""
+    )
 
-# ============================================================
-# STORY GENERATOR
-# ============================================================
-
-def generate_story(title, word_limit):
-
-    prompt = f"""
-Create an original cinematic story titled:
-
-"{title}"
-
-Requirements:
-
-- Approximately {word_limit} words.
-- Strong opening.
-- Clear characters.
-- Clear locations.
-- Interesting conflict.
-- Emotional progression.
-- Strong ending.
-- Highly visual descriptions.
-- Every major scene should contain concrete visual elements.
-- Include objects, environments, characters, lighting,
-  weather, architecture and actions where appropriate.
-- Suitable for a general audience.
-- Do not explain the writing process.
-- Return only the story.
-"""
+    text = text.replace(
+        "```",
+        ""
+    )
 
     try:
 
-        return (
-            gemini_text(prompt),
-            "Gemini Flash Lite"
-        )
-
-    except Exception as gemini_error:
-
-        if groq_client:
-
-            try:
-
-                return (
-                    groq_text(prompt),
-                    "Groq fallback"
-                )
-
-            except Exception:
-                pass
-
-        raise gemini_error
-
-
-# ============================================================
-# SCENE PLANNER
-# ============================================================
-
-def create_scene_plan(
-    title,
-    story,
-    number_of_scenes
-):
-
-    prompt = f"""
-You are a cinematic storyboard director.
-
-Turn the following story into exactly
-{number_of_scenes} visual scenes.
-
-TITLE:
-{title}
-
-STORY:
-{story[:12000]}
-
-For every scene provide:
-
-SCENE_NUMBER
-SCENE_TITLE
-DESCRIPTION
-IMAGE_QUERY
-VIDEO_QUERY
-
-The scene must contain concrete visual details.
-
-Important:
-
-- Do not repeat the same scene.
-- Cover the story from beginning to ending.
-- Every major character should appear when relevant.
-- Important locations should appear.
-- Important objects should appear.
-- Important actions should appear.
-- Include changes in weather, lighting or atmosphere when relevant.
-- Queries must be suitable for Pixabay.
-- Queries must describe visible things, not abstract emotions.
-- Keep image and video queries between 3 and 8 words.
-- Do not use quotation marks.
-- Avoid words like "concept", "idea", "symbolism".
-- Prefer cinematic descriptions such as:
-  enchanted forest cottage
-  young princess red cloak
-  seven miners mountain cottage
-  dark castle storm
-  magical mirror room
-
-Return ONLY blocks in this exact format:
-
-SCENE|1|Scene title|Scene description|image search query|video search query
-
-SCENE|2|Scene title|Scene description|image search query|video search query
-
-...
-"""
-
-    try:
-
-        result = gemini_text(prompt)
+        return json.loads(text)
 
     except Exception:
 
-        if groq_client:
-            result = groq_text(prompt)
-        else:
-            raise
-
-    scenes = []
-
-    for line in result.splitlines():
-
-        line = line.strip()
-
-        if not line.startswith("SCENE|"):
-            continue
-
-        parts = line.split("|")
-
-        if len(parts) < 6:
-            continue
-
-        try:
-
-            scene_number = int(
-                parts[1].strip()
-            )
-
-        except:
-            scene_number = len(scenes) + 1
-
-        scene = {
-            "number": scene_number,
-            "title": parts[2].strip(),
-            "description": parts[3].strip(),
-            "image_query": parts[4].strip(),
-            "video_query": parts[5].strip()
+        return {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt
         }
 
-        scenes.append(scene)
-
-    # Safety fallback
-    if not scenes:
-
-        scenes = [{
-            "number": i + 1,
-            "title": f"Scene {i + 1}",
-            "description": story[:500],
-            "image_query": title,
-            "video_query": title
-        } for i in range(number_of_scenes)]
-
-    return scenes[:number_of_scenes]
-
 
 # ============================================================
-# PIXABAY IMAGE SEARCH
+# PIXABAY
 # ============================================================
 
-def pixabay_image(query):
+def search_pixabay(query):
 
     if not PIXABAY_API_KEY:
-        return None
+
+        return []
 
     url = "https://pixabay.com/api/"
 
     params = {
         "key": PIXABAY_API_KEY,
-        "q": query[:100],
+        "q": query,
         "image_type": "photo",
-        "orientation": "horizontal",
         "safesearch": "true",
-        "per_page": 12
+        "per_page": 6
     }
 
-    try:
-
-        response = requests.get(
-            url,
-            params=params,
-            timeout=20
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        hits = data.get("hits", [])
-
-        if not hits:
-            return None
-
-        # Prefer large landscape images
-        for hit in hits:
-
-            image_url = (
-                hit.get("largeImageURL")
-                or hit.get("webformatURL")
-            )
-
-            if image_url:
-                return {
-                    "url": image_url,
-                    "page": hit.get("pageURL", ""),
-                    "query": query
-                }
-
-    except Exception:
-        return None
-
-    return None
-
-
-# ============================================================
-# PIXABAY VIDEO SEARCH
-# ============================================================
-
-def pixabay_video(query):
-
-    if not PIXABAY_API_KEY:
-        return None
-
-    url = "https://pixabay.com/api/videos/"
-
-    params = {
-        "key": PIXABAY_API_KEY,
-        "q": query[:100],
-        "video_type": "film",
-        "safesearch": "true",
-        "per_page": 12
-    }
-
-    try:
-
-        response = requests.get(
-            url,
-            params=params,
-            timeout=20
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        hits = data.get("hits", [])
-
-        if not hits:
-            return None
-
-        for hit in hits:
-
-            videos = hit.get(
-                "videos",
-                {}
-            )
-
-            # Prefer high-quality footage
-            for quality in [
-                "large",
-                "medium",
-                "small"
-            ]:
-
-                if quality in videos:
-
-                    video_url = videos[
-                        quality
-                    ].get("url")
-
-                    if video_url:
-
-                        return {
-                            "url": video_url,
-                            "page": hit.get(
-                                "pageURL",
-                                ""
-                            ),
-                            "query": query
-                        }
-
-    except Exception:
-        return None
-
-    return None
-
-
-# ============================================================
-# IMAGE DOWNLOAD
-# ============================================================
-
-def download_image(url):
-
-    try:
-
-        response = requests.get(
-            url,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        return Image.open(
-            BytesIO(response.content)
-        ).convert("RGB")
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# FONT
-# ============================================================
-
-def get_font(size):
-
-    possible_fonts = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
-    ]
-
-    for font_path in possible_fonts:
-
-        if os.path.exists(font_path):
-
-            try:
-                return ImageFont.truetype(
-                    font_path,
-                    size
-                )
-            except:
-                pass
-
-    return ImageFont.load_default()
-
-
-# ============================================================
-# CINEMATIC POSTER CREATOR
-# ============================================================
-
-def create_cinematic_poster(
-    title,
-    scene_images
-):
-
-    width = 1600
-    height = 1000
-
-    canvas = Image.new(
-        "RGB",
-        (width, height),
-        (12, 14, 20)
+    response = requests.get(
+        url,
+        params=params,
+        timeout=20
     )
 
-    valid_images = []
+    if response.status_code != 200:
 
-    for item in scene_images:
+        return []
 
-        image = download_image(
-            item["url"]
-        )
+    data = response.json()
 
-        if image:
+    results = []
 
-            valid_images.append(
-                (
-                    image,
-                    item
-                )
-            )
-
-    if not valid_images:
-        return None
-
-    # --------------------------------------------------------
-    # Main image
-    # --------------------------------------------------------
-
-    main_image = valid_images[0][0]
-
-    main_image = ImageEnhance.Color(
-        main_image
-    ).enhance(1.15)
-
-    main_image = ImageEnhance.Contrast(
-        main_image
-    ).enhance(1.08)
-
-    main_image = ImageOps_fit(
-        main_image,
-        (width, height)
-    )
-
-    canvas.paste(
-        main_image,
-        (0, 0)
-    )
-
-    # Dark overlay
-    overlay = Image.new(
-        "RGBA",
-        (width, height),
-        (0, 0, 0, 0)
-    )
-
-    draw = ImageDraw.Draw(
-        overlay
-    )
-
-    draw.rectangle(
-        (0, 0, width, height),
-        fill=(0, 0, 0, 95)
-    )
-
-    # Bottom gradient-ish bands
-    draw.rectangle(
-        (0, 620, width, height),
-        fill=(0, 0, 0, 150)
-    )
-
-    canvas = Image.alpha_composite(
-        canvas.convert("RGBA"),
-        overlay
-    ).convert("RGB")
-
-    # --------------------------------------------------------
-    # Smaller scene thumbnails
-    # --------------------------------------------------------
-
-    thumb_size = (250, 145)
-
-    start_x = 55
-    thumb_y = 725
-
-    for index, (image, item) in enumerate(
-        valid_images[1:5]
+    for item in data.get(
+        "hits",
+        []
     ):
 
-        x = start_x + index * 300
-
-        thumb = ImageOps_fit(
-            image,
-            thumb_size
-        )
-
-        canvas.paste(
-            thumb,
-            (x, thumb_y)
-        )
-
-        draw = ImageDraw.Draw(
-            canvas
-        )
-
-        draw.rectangle(
-            (
-                x,
-                thumb_y + 115,
-                x + 250,
-                thumb_y + 145
-            ),
-            fill=(0, 0, 0)
-        )
-
-        scene_font = get_font(16)
-
-        draw.text(
-            (
-                x + 10,
-                thumb_y + 121
-            ),
-            f"Scene {index + 2}",
-            font=scene_font,
-            fill="white"
-        )
-
-    # --------------------------------------------------------
-    # Title
-    # --------------------------------------------------------
-
-    draw = ImageDraw.Draw(
-        canvas
-    )
-
-    title_font = get_font(68)
-
-    # Wrap title
-    title_text = title
-
-    if len(title_text) > 32:
-
-        words = title_text.split()
-
-        line1 = ""
-        line2 = ""
-
-        for word in words:
-
-            if len(line1 + " " + word) < 32:
-                line1 += (
-                    (" " if line1 else "")
-                    + word
+        results.append(
+            {
+                "preview": item.get(
+                    "webformatURL"
+                ),
+                "large": item.get(
+                    "largeImageURL"
+                ),
+                "page": item.get(
+                    "pageURL"
+                ),
+                "tags": item.get(
+                    "tags",
+                    ""
                 )
-            else:
-                line2 += (
-                    (" " if line2 else "")
-                    + word
-                )
-
-        title_text = (
-            line1 + "\n" + line2
+            }
         )
 
-    draw.text(
-        (55, 555),
-        title_text,
-        font=title_font,
-        fill="white",
-        stroke_width=2,
-        stroke_fill="black"
-    )
-
-    # Subtitle
-    subtitle_font = get_font(24)
-
-    draw.text(
-        (58, 675),
-        "A CINEMATIC STORY EXPERIENCE",
-        font=subtitle_font,
-        fill=(220, 220, 220)
-    )
-
-    # Border
-    draw.rectangle(
-        (15, 15, width - 15, height - 15),
-        outline=(255, 255, 255),
-        width=3
-    )
-
-    output = BytesIO()
-
-    canvas.save(
-        output,
-        format="JPEG",
-        quality=94
-    )
-
-    output.seek(0)
-
-    return output.getvalue()
+    return results
 
 
 # ============================================================
-# IMAGE FIT HELPER
+# IMAGE GENERATION
 # ============================================================
 
-def ImageOps_fit(image, size):
+def generate_ai_image(prompt):
 
-    target_width, target_height = size
+    if not IMAGE_GENERATION_API_URL:
 
-    image_ratio = (
-        image.width / image.height
-    )
+        raise Exception(
+            """
+IMAGE_GENERATION_API_URL is not configured.
 
-    target_ratio = (
-        target_width / target_height
-    )
+Gemini and Groq are being used for AI prompt generation,
+while Pixabay is being used for reference images.
 
-    if image_ratio > target_ratio:
-
-        new_height = target_height
-
-        new_width = int(
-            new_height * image_ratio
+You still need an image-generation endpoint/model
+to actually create the final image.
+"""
         )
 
-    else:
+    headers = {
+        "Content-Type": "application/json"
+    }
 
-        new_width = target_width
+    if IMAGE_GENERATION_API_KEY:
 
-        new_height = int(
-            new_width / image_ratio
+        headers["Authorization"] = (
+            f"Bearer {IMAGE_GENERATION_API_KEY}"
         )
 
-    image = image.resize(
-        (new_width, new_height),
-        Image.Resampling.LANCZOS
+    payload = {
+        "prompt": prompt
+    }
+
+    response = requests.post(
+        IMAGE_GENERATION_API_URL,
+        json=payload,
+        headers=headers,
+        timeout=180
     )
 
-    left = (
-        new_width - target_width
-    ) // 2
+    response.raise_for_status()
 
-    top = (
-        new_height - target_height
-    ) // 2
+    data = response.json()
 
-    return image.crop(
-        (
-            left,
-            top,
-            left + target_width,
-            top + target_height
+    image_url = data.get(
+        "image_url"
+    )
+
+    if not image_url:
+
+        image_url = data.get(
+            "url"
+        )
+
+    if not image_url:
+
+        raise Exception(
+            "The image API did not return an image URL."
+        )
+
+    image_response = requests.get(
+        image_url,
+        timeout=120
+    )
+
+    image_response.raise_for_status()
+
+    return Image.open(
+        BytesIO(
+            image_response.content
         )
     )
 
 
 # ============================================================
-# DOWNLOAD VIDEO
+# GENERATE BUTTON
 # ============================================================
 
-def download_video(
-    url,
-    output_path
-):
-
-    try:
-
-        response = requests.get(
-            url,
-            timeout=60,
-            stream=True
-        )
-
-        response.raise_for_status()
-
-        with open(
-            output_path,
-            "wb"
-        ) as file:
-
-            for chunk in response.iter_content(
-                chunk_size=1024 * 1024
-            ):
-
-                if chunk:
-                    file.write(chunk)
-
-        return True
-
-    except Exception:
-
-        return False
-
-
-# ============================================================
-# NORMALIZE VIDEO
-# ============================================================
-
-def normalize_video(
-    input_path,
-    output_path,
-    duration
-):
-
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-
-    command = [
-        ffmpeg,
-        "-y",
-        "-i",
-        input_path,
-
-        "-t",
-        str(duration),
-
-        "-vf",
-        (
-            "scale=1280:720:"
-            "force_original_aspect_ratio=decrease,"
-            "pad=1280:720:(ow-iw)/2:(oh-ih)/2"
-        ),
-
-        "-r",
-        "25",
-
-        "-c:v",
-        "libx264",
-
-        "-preset",
-        "veryfast",
-
-        "-pix_fmt",
-        "yuv420p",
-
-        "-an",
-
-        output_path
-    ]
-
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-
-    return (
-        result.returncode == 0
-        and os.path.exists(output_path)
-    )
-
-
-# ============================================================
-# CREATE MULTI-SCENE VIDEO
-# ============================================================
-
-def create_multiscene_video(
-    scene_videos,
-    clip_duration
-):
-
-    if not scene_videos:
-        return None
-
-    temp_dir = tempfile.mkdtemp(
-        prefix="story_video_"
-    )
-
-    try:
-
-        normalized_files = []
-
-        # ----------------------------------------------------
-        # Download + normalize every scene
-        # ----------------------------------------------------
-
-        for index, scene in enumerate(
-            scene_videos
-        ):
-
-            raw_path = os.path.join(
-                temp_dir,
-                f"raw_{index}.mp4"
-            )
-
-            normalized_path = os.path.join(
-                temp_dir,
-                f"scene_{index}.mp4"
-            )
-
-            downloaded = download_video(
-                scene["url"],
-                raw_path
-            )
-
-            if not downloaded:
-                continue
-
-            success = normalize_video(
-                raw_path,
-                normalized_path,
-                clip_duration
-            )
-
-            if success:
-
-                normalized_files.append(
-                    normalized_path
-                )
-
-        if not normalized_files:
-            return None
-
-        # ----------------------------------------------------
-        # FFmpeg concat list
-        # ----------------------------------------------------
-
-        concat_file = os.path.join(
-            temp_dir,
-            "concat.txt"
-        )
-
-        with open(
-            concat_file,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            for path in normalized_files:
-
-                safe_path = path.replace(
-                    "'",
-                    "'\\''"
-                )
-
-                file.write(
-                    f"file '{safe_path}'\n"
-                )
-
-        final_path = os.path.join(
-            temp_dir,
-            "final_story.mp4"
-        )
-
-        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-
-        command = [
-            ffmpeg,
-            "-y",
-
-            "-f",
-            "concat",
-
-            "-safe",
-            "0",
-
-            "-i",
-            concat_file,
-
-            "-c",
-            "copy",
-
-            final_path
-        ]
-
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        if (
-            result.returncode != 0
-            or not os.path.exists(final_path)
-        ):
-
-            return None
-
-        with open(
-            final_path,
-            "rb"
-        ) as file:
-
-            return file.read()
-
-    finally:
-
-        shutil.rmtree(
-            temp_dir,
-            ignore_errors=True
-        )
-
-
-# ============================================================
-# NARRATION
-# ============================================================
-
-def generate_audio(
-    text,
-    language_code
-):
-
-    output = BytesIO()
-
-    tts = gTTS(
-        text=text,
-        lang=language_code,
-        slow=False
-    )
-
-    tts.write_to_fp(
-        output
-    )
-
-    output.seek(0)
-
-    return output.read()
-
-
-# ============================================================
-# STORY TITLE INPUT
-# ============================================================
-
-title = st.text_input(
-    "📖 Enter your story title",
-    placeholder=(
-        "Example: Snow White and the Seven Dwarfs"
-    )
+generate = st.button(
+    "✨ GENERATE AI IMAGE",
+    type="primary"
 )
 
 
 # ============================================================
-# GENERATE STORY
+# MAIN GENERATION PIPELINE
 # ============================================================
 
-if st.button(
-    "✨ Generate Complete Story",
-    type="primary",
-    use_container_width=True
-):
+if generate:
 
-    if not title.strip():
+    if not story.strip():
 
         st.warning(
-            "Please enter a story title first."
+            "Please enter your story first."
         )
 
-    else:
+        st.stop()
 
-        # Clear previous project
-        st.session_state.story = ""
-        st.session_state.scenes = []
-        st.session_state.scene_images = []
-        st.session_state.scene_videos = []
-        st.session_state.poster_bytes = None
-        st.session_state.video_bytes = None
-        st.session_state.audio_bytes = None
+    try:
 
         # ----------------------------------------------------
-        # Story
+        # GEMINI
         # ----------------------------------------------------
 
         with st.spinner(
-            "✍️ Writing your cinematic story..."
+            "🧠 Gemini is analyzing your story..."
         ):
 
-            try:
+            result = generate_gemini_prompt(
+                story=story,
+                style=style,
+                aspect_ratio=aspect_ratio,
+                lighting=lighting,
+                camera=camera,
+                character=character
+            )
 
-                story, provider = generate_story(
-                    title,
-                    word_limit
-                )
+        title = result.get(
+            "title",
+            "AI Generated Scene"
+        )
 
-                st.session_state.story = story
-                st.session_state.story_title = title
-                st.session_state.provider = provider
+        image_prompt = result.get(
+            "prompt",
+            ""
+        )
 
-            except Exception as e:
-
-                st.error(
-                    f"Story generation failed:\n\n{e}"
-                )
-
-        # ----------------------------------------------------
-        # Scene plan
-        # ----------------------------------------------------
-
-        if st.session_state.story:
-
-            with st.spinner(
-                "🎞️ Breaking story into cinematic scenes..."
-            ):
-
-                try:
-
-                    scenes = create_scene_plan(
-                        title,
-                        st.session_state.story,
-                        scene_count
-                    )
-
-                    st.session_state.scenes = scenes
-
-                except Exception as e:
-
-                    st.error(
-                        f"Scene planning failed:\n\n{e}"
-                    )
-
-
-# ============================================================
-# STORY DISPLAY
-# ============================================================
-
-if st.session_state.story:
-
-    st.divider()
-
-    st.subheader(
-        f"📖 {st.session_state.story_title}"
-    )
-
-    safe_story = html.escape(
-        st.session_state.story
-    )
-
-    st.markdown(
-        f"""
-        <div class="story-card">
-            {safe_story.replace(chr(10), "<br>")}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.caption(
-        f"Generated with {st.session_state.provider}"
-    )
-
-
-# ============================================================
-# STORYBOARD
-# ============================================================
-
-if st.session_state.scenes:
-
-    st.divider()
-
-    st.subheader(
-        "🎞️ Cinematic Storyboard"
-    )
-
-    for scene in st.session_state.scenes:
-
-        st.markdown(
-            f"""
-            <div class="scene-card">
-
-            <h4>
-            🎬 Scene {scene["number"]}: 
-            {html.escape(scene["title"])}
-            </h4>
-
-            <p>
-            {html.escape(scene["description"])}
-            </p>
-
-            <small>
-            🖼️ {html.escape(scene["image_query"])}
-            <br>
-            🎥 {html.escape(scene["video_query"])}
-            </small>
-
-            </div>
-            """,
-            unsafe_allow_html=True
+        negative_prompt = result.get(
+            "negative_prompt",
+            ""
         )
 
 
-# ============================================================
-# MEDIA GENERATION
-# ============================================================
+        # ----------------------------------------------------
+        # GROQ
+        # ----------------------------------------------------
 
-if st.session_state.story:
-
-    st.divider()
-
-    st.subheader(
-        "🎨 Create Story Media"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    # ========================================================
-    # CINEMATIC PHOTO
-    # ========================================================
-
-    with col1:
-
-        if st.button(
-            "🖼️ Generate Story Photo",
-            use_container_width=True
-        ):
-
-            if not PIXABAY_API_KEY:
-
-                st.error(
-                    "PIXABAY_API_KEY is missing."
-                )
-
-            else:
-
-                st.session_state.scene_images = []
-
-                progress = st.progress(
-                    0
-                )
-
-                found_images = []
-
-                for index, scene in enumerate(
-                    st.session_state.scenes
-                ):
-
-                    query = scene[
-                        "image_query"
-                    ]
-
-                    result = pixabay_image(
-                        query
-                    )
-
-                    if result:
-
-                        result["scene"] = (
-                            scene["number"]
-                        )
-
-                        result["title"] = (
-                            scene["title"]
-                        )
-
-                        found_images.append(
-                            result
-                        )
-
-                    progress.progress(
-                        (
-                            index + 1
-                        )
-                        /
-                        len(
-                            st.session_state.scenes
-                        )
-                    )
-
-                st.session_state.scene_images = (
-                    found_images
-                )
-
-                if found_images:
-
-                    with st.spinner(
-                        "🎨 Building cinematic story poster..."
-                    ):
-
-                        poster = (
-                            create_cinematic_poster(
-                                st.session_state.story_title,
-                                found_images
-                            )
-                        )
-
-                        st.session_state.poster_bytes = (
-                            poster
-                        )
-
-                    st.success(
-                        f"Created a visual story poster "
-                        f"from {len(found_images)} story scenes."
-                    )
-
-                else:
-
-                    st.warning(
-                        "No relevant Pixabay images were found."
-                    )
-
-
-    # ========================================================
-    # MULTI-SCENE VIDEO
-    # ========================================================
-
-    with col2:
-
-        if st.button(
-            "🎥 Generate Multi-Scene Video",
-            use_container_width=True
-        ):
-
-            if not PIXABAY_API_KEY:
-
-                st.error(
-                    "PIXABAY_API_KEY is missing."
-                )
-
-            else:
-
-                st.session_state.scene_videos = []
-
-                progress = st.progress(
-                    0
-                )
-
-                found_videos = []
-
-                for index, scene in enumerate(
-                    st.session_state.scenes
-                ):
-
-                    query = scene[
-                        "video_query"
-                    ]
-
-                    result = pixabay_video(
-                        query
-                    )
-
-                    if result:
-
-                        result["scene"] = (
-                            scene["number"]
-                        )
-
-                        result["title"] = (
-                            scene["title"]
-                        )
-
-                        found_videos.append(
-                            result
-                        )
-
-                    progress.progress(
-                        (
-                            index + 1
-                        )
-                        /
-                        len(
-                            st.session_state.scenes
-                        )
-                    )
-
-                st.session_state.scene_videos = (
-                    found_videos
-                )
-
-                if found_videos:
-
-                    with st.spinner(
-                        "🎬 Downloading and assembling scenes..."
-                    ):
-
-                        video = (
-                            create_multiscene_video(
-                                found_videos,
-                                clip_duration
-                            )
-                        )
-
-                        st.session_state.video_bytes = (
-                            video
-                        )
-
-                    if video:
-
-                        st.success(
-                            f"Created a {len(found_videos)}-scene video."
-                        )
-
-                    else:
-
-                        st.error(
-                            "The video clips were found, "
-                            "but FFmpeg could not assemble them."
-                        )
-
-                else:
-
-                    st.warning(
-                        "No relevant video clips were found."
-                    )
-
-
-    # ========================================================
-    # NARRATION
-    # ========================================================
-
-    with col3:
-
-        if st.button(
-            "🔊 Generate Narration",
-            use_container_width=True
-        ):
+        if use_groq:
 
             with st.spinner(
-                "🎙️ Creating narration..."
+                "✨ Groq is improving the prompt..."
             ):
 
-                try:
-
-                    audio = generate_audio(
-                        st.session_state.story,
-                        language[1]
-                    )
-
-                    st.session_state.audio_bytes = (
-                        audio
-                    )
-
-                    st.success(
-                        "Narration created!"
-                    )
-
-                except Exception as e:
-
-                    st.error(
-                        f"Narration failed:\n\n{e}"
-                    )
-
-
-# ============================================================
-# DISPLAY GENERATED PHOTO
-# ============================================================
-
-if st.session_state.poster_bytes:
-
-    st.divider()
-
-    st.subheader(
-        "🖼️ Your Story Photo"
-    )
-
-    st.image(
-        st.session_state.poster_bytes,
-        use_container_width=True
-    )
-
-    st.download_button(
-        "⬇️ Download Story Photo",
-        data=st.session_state.poster_bytes,
-        file_name="story_cinematic_poster.jpg",
-        mime="image/jpeg",
-        use_container_width=True
-    )
-
-    st.caption(
-        "Visual sources: Pixabay • Composite created by this app"
-    )
-
-
-# ============================================================
-# DISPLAY MULTI-SCENE VIDEO
-# ============================================================
-
-if st.session_state.video_bytes:
-
-    st.divider()
-
-    st.subheader(
-        "🎥 Your Multi-Scene Story Video"
-    )
-
-    st.video(
-        st.session_state.video_bytes
-    )
-
-    st.download_button(
-        "⬇️ Download Multi-Scene Video",
-        data=st.session_state.video_bytes,
-        file_name="story_multi_scene.mp4",
-        mime="video/mp4",
-        use_container_width=True
-    )
-
-    st.caption(
-        "Video scenes sourced from Pixabay and assembled by this app."
-    )
-
-
-# ============================================================
-# DISPLAY NARRATION
-# ============================================================
-
-if st.session_state.audio_bytes:
-
-    st.divider()
-
-    st.subheader(
-        "🔊 Story Narration"
-    )
-
-    st.audio(
-        st.session_state.audio_bytes,
-        format="audio/mp3"
-    )
-
-    st.download_button(
-        "⬇️ Download Narration",
-        data=st.session_state.audio_bytes,
-        file_name="story_narration.mp3",
-        mime="audio/mp3",
-        use_container_width=True
-    )
-
-
-# ============================================================
-# SCENE MEDIA DETAILS
-# ============================================================
-
-if (
-    st.session_state.scene_images
-    or
-    st.session_state.scene_videos
-):
-
-    st.divider()
-
-    with st.expander(
-        "🔎 See the media selected for each scene"
-    ):
-
-        if st.session_state.scene_images:
-
-            st.markdown(
-                "### 🖼️ Photo scenes"
-            )
-
-            for item in (
-                st.session_state.scene_images
-            ):
-
-                st.write(
-                    f"Scene {item['scene']}: "
-                    f"{item['title']} — "
-                    f"search: {item['query']}"
+                improved = enhance_with_groq(
+                    image_prompt,
+                    negative_prompt
                 )
 
-        if st.session_state.scene_videos:
+                image_prompt = improved[
+                    "prompt"
+                ]
 
-            st.markdown(
-                "### 🎥 Video scenes"
+                negative_prompt = improved[
+                    "negative_prompt"
+                ]
+
+
+        # ----------------------------------------------------
+        # FINAL PROMPT
+        # ----------------------------------------------------
+
+        final_prompt = f"""
+{image_prompt}
+
+VISUAL STYLE:
+{style}
+
+LIGHTING:
+{lighting}
+
+CAMERA:
+{camera}
+
+ASPECT RATIO:
+{aspect_ratio}
+
+NEGATIVE PROMPT:
+{negative_prompt}
+
+Create a single highly detailed cinematic image.
+
+Every important element from the original story must
+be visually represented.
+
+Maintain consistent character appearance,
+environment, objects, colors and lighting.
+
+Do not introduce unrelated objects.
+"""
+
+
+        # ----------------------------------------------------
+        # DISPLAY PROMPT
+        # ----------------------------------------------------
+
+        with st.expander(
+            "🔍 View AI Image Prompt"
+        ):
+
+            st.write(
+                final_prompt
             )
 
-            for item in (
-                st.session_state.scene_videos
+
+        # ----------------------------------------------------
+        # PIXABAY
+        # ----------------------------------------------------
+
+        pixabay_results = []
+
+        if use_pixabay:
+
+            with st.spinner(
+                "🔎 Searching Pixabay for visual references..."
             ):
 
-                st.write(
-                    f"Scene {item['scene']}: "
-                    f"{item['title']} — "
-                    f"search: {item['query']}"
+                query = story[:100]
+
+                pixabay_results = search_pixabay(
+                    query
                 )
 
 
-# ============================================================
-# FOOTER
-# ============================================================
+        # ----------------------------------------------------
+        # GENERATE IMAGE
+        # ----------------------------------------------------
 
-st.divider()
+        with st.spinner(
+            "🎨 Creating your AI image..."
+        ):
 
-st.markdown(
-    f"""
-    <div style="
-        text-align:center;
-        opacity:0.65;
-        padding:15px;
-    ">
-        🎬 AI Story Studio
-        &nbsp; • &nbsp;
-        Gemini Flash Lite
-        &nbsp; • &nbsp;
-        Pixabay
-        &nbsp; • &nbsp;
-        gTTS
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+            generated_image = generate_ai_image(
+                final_prompt
+            )
+
+
+        # ----------------------------------------------------
+        # RESULT
+        # ----------------------------------------------------
+
+        st.success(
+            f"✅ {title}"
+        )
+
+        left, right = st.columns(
+            [2, 1]
+        )
+
+
+        # ----------------------------------------------------
+        # IMAGE
+        # ----------------------------------------------------
+
+        with left:
+
+            st.image(
+                generated_image,
+                caption=title,
+                use_container_width=True
+            )
+
+            buffer = io.BytesIO()
+
+            generated_image.save(
+                buffer,
+                format="PNG"
+            )
+
+            st.download_button(
+                "⬇️ Download Image",
+                buffer.getvalue(),
+                "ai_generated_image.png",
+                "image/png",
+                use_container_width=True
+            )
+
+
+        # ----------------------------------------------------
+        # DETAILS
+        # ----------------------------------------------------
+
+        with right:
+
+            st.subheader(
+                "🎬 Scene Details"
+            )
+
+            st.write(
+                f"**Style:** {style}"
+            )
+
+            st.write(
+                f"**Lighting:** {lighting}"
+            )
+
+            st.write(
+                f"**Camera:** {camera}"
+            )
+
+            st.write(
+                f"**Aspect Ratio:** {aspect_ratio}"
+            )
+
+            st.markdown(
+                "### AI Prompt"
+            )
+
+            st.info(
+                image_prompt
+            )
+
+
+        # ----------------------------------------------------
+        # PIXABAY REFERENCES
+        # ----------------------------------------------------
+
+        if pixabay_results:
+
+            st.markdown("---")
+
+            st.subheader(
+                "🖼️ Visual References"
+            )
+
+            columns = st.columns(3)
+
+            for index, item in enumerate(
+                pixabay_results
+            ):
+
+                with columns[
+                    index % 3
+                ]:
+
+                    st.image(
+                        item["preview"],
+                        use_container_width=True
+                    )
+
+                    st.caption(
+                        item["tags"]
+                    )
+
+
+    except Exception as error:
+
+        st.error(
+            "❌ Generation failed."
+        )
+
+        st.exception(error)
