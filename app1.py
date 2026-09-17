@@ -1,26 +1,23 @@
 import streamlit as st
-import requests
-import html
-import json
-import re
 import os
+import io
+import re
+import json
+import time
 import tempfile
 import subprocess
-import shutil
-import time
 from io import BytesIO
 
-from PIL import Image, ImageDraw, ImageFont, ImageEnhance
+import requests
+from PIL import Image
 from gtts import gTTS
 from groq import Groq
 
-# Gemini import
 try:
-    from google import genai
+    from huggingface_hub import InferenceClient
 except ImportError:
-    genai = None
+    InferenceClient = None
 
-# FFmpeg import is OPTIONAL so the app does not crash on startup
 try:
     import imageio_ffmpeg
 except ImportError:
@@ -35,7 +32,7 @@ st.set_page_config(
     page_title="AI Story & Cinematic Studio",
     page_icon="🎬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 
@@ -46,16 +43,14 @@ st.set_page_config(
 DEFAULT_STATE = {
     "story": "",
     "story_title": "",
-    "provider": "",
     "scenes": [],
     "scene_images": [],
     "scene_videos": [],
     "scene_audio": [],
-    "poster_bytes": None,
-    "video_bytes": None,
-    "narrated_video_bytes": None,
-    "audio_bytes": None,
-    "project_generated": False,
+    "full_audio": None,
+    "final_movie": None,
+    "generation_errors": [],
+    "project_ready": False,
 }
 
 for key, value in DEFAULT_STATE.items():
@@ -64,203 +59,72 @@ for key, value in DEFAULT_STATE.items():
 
 
 # ============================================================
-# SECRETS
+# API SECRETS
 # ============================================================
 
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
-PIXABAY_API_KEY = st.secrets.get("PIXABAY_API_KEY", "")
+HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 
 
 # ============================================================
-# API CLIENTS
+# THEME CONFIGURATION
 # ============================================================
 
-gemini_client = None
-groq_client = None
+THEMES = {
+    "Dark Midnight": {
+        "bg": "#0e1117",
+        "card": "#1e232a",
+        "text": "#ffffff",
+        "accent": "#4A90E2",
+        "secondary": "#8ab4f8",
+    },
 
+    "Light Elegant": {
+        "bg": "#f8f9fa",
+        "card": "#ffffff",
+        "text": "#212529",
+        "accent": "#0d6efd",
+        "secondary": "#6c757d",
+    },
 
-if GEMINI_API_KEY and genai:
+    "Cyberpunk Neon": {
+        "bg": "#050505",
+        "card": "#120024",
+        "text": "#00ffcc",
+        "accent": "#ff007f",
+        "secondary": "#00ffff",
+    },
 
-    try:
-        gemini_client = genai.Client(
-            api_key=GEMINI_API_KEY
-        )
-    except Exception:
-        gemini_client = None
+    "Enchanted Forest": {
+        "bg": "#0b1d13",
+        "card": "#132a1c",
+        "text": "#e0f2fe",
+        "accent": "#22c55e",
+        "secondary": "#a3e635",
+    },
 
-
-if GROQ_API_KEY:
-
-    try:
-        groq_client = Groq(
-            api_key=GROQ_API_KEY
-        )
-    except Exception:
-        groq_client = None
+    "Sunset Glow": {
+        "bg": "#1a0b1c",
+        "card": "#2d1236",
+        "text": "#fdf2f8",
+        "accent": "#f43f5e",
+        "secondary": "#fb923c",
+    },
+}
 
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 
-with st.sidebar:
+st.sidebar.title("🎨 Theme & Customization")
 
-    st.markdown(
-        """
-        <div style="
-            text-align:center;
-            padding:10px 0 20px 0;
-        ">
-            <div style="font-size:50px;">🎬</div>
+theme_name = st.sidebar.selectbox(
+    "Choose Color Theme",
+    list(THEMES.keys()),
+)
 
-            <h2 style="margin:0;">
-                AI Story Studio
-            </h2>
-
-            <p style="opacity:0.7;">
-                Story → Scenes → Images → Video → Voice
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.divider()
-
-    # ========================================================
-    # THEME
-    # ========================================================
-
-    st.subheader("🎨 Theme")
-
-    theme_choice = st.selectbox(
-        "Choose colour theme",
-        [
-            "Dark Midnight",
-            "Light Elegant",
-            "Cyberpunk Neon",
-            "Enchanted Forest",
-            "Sunset Glow"
-        ]
-    )
-
-    THEMES = {
-
-        "Dark Midnight": {
-            "background": "#0E1117",
-            "card": "#1E232A",
-            "text": "#FFFFFF",
-            "primary": "#4A90E2",
-            "accent": "#22C55E"
-        },
-
-        "Light Elegant": {
-            "background": "#F8F9FA",
-            "card": "#FFFFFF",
-            "text": "#212529",
-            "primary": "#0D6EFD",
-            "accent": "#198754"
-        },
-
-        "Cyberpunk Neon": {
-            "background": "#050505",
-            "card": "#120024",
-            "text": "#00FFCC",
-            "primary": "#FF007F",
-            "accent": "#00FFFF"
-        },
-
-        "Enchanted Forest": {
-            "background": "#0B1D13",
-            "card": "#132A1C",
-            "text": "#E0F2FE",
-            "primary": "#22C55E",
-            "accent": "#A3E635"
-        },
-
-        "Sunset Glow": {
-            "background": "#1A0B1C",
-            "card": "#2D1236",
-            "text": "#FDF2F8",
-            "primary": "#F43F5E",
-            "accent": "#FB923C"
-        }
-    }
-
-    theme = THEMES[theme_choice]
-
-    st.divider()
-
-    # ========================================================
-    # STORY SETTINGS
-    # ========================================================
-
-    st.subheader("⚙️ Story Settings")
-
-    word_limit = st.slider(
-        "Story length",
-        150,
-        2000,
-        700,
-        50
-    )
-
-    scene_count = st.slider(
-        "Number of scenes",
-        4,
-        10,
-        6
-    )
-
-    clip_duration = st.slider(
-        "Video seconds / scene",
-        3,
-        10,
-        5
-    )
-
-    narration_language = st.selectbox(
-        "Narration language",
-        [
-            ("English", "en"),
-            ("Hindi", "hi"),
-            ("Spanish", "es"),
-            ("French", "fr"),
-            ("German", "de")
-        ],
-        format_func=lambda x: x[0]
-    )
-
-    st.divider()
-
-    # ========================================================
-    # API STATUS
-    # ========================================================
-
-    st.subheader("🔑 API Status")
-
-    if GEMINI_API_KEY:
-        st.success("Gemini ✓")
-    else:
-        st.warning("Gemini missing")
-
-    if GROQ_API_KEY:
-        st.success("Groq ✓")
-    else:
-        st.info("Groq fallback unavailable")
-
-    if PIXABAY_API_KEY:
-        st.success("Pixabay ✓")
-    else:
-        st.warning("Pixabay missing")
-
-    if imageio_ffmpeg:
-        st.success("FFmpeg ✓")
-    else:
-        st.warning(
-            "FFmpeg package unavailable"
-        )
+theme = THEMES[theme_name]
 
 
 # ============================================================
@@ -272,7 +136,7 @@ st.markdown(
     <style>
 
     .stApp {{
-        background-color: {theme["background"]};
+        background-color: {theme["bg"]};
         color: {theme["text"]};
     }}
 
@@ -280,52 +144,185 @@ st.markdown(
         background-color: {theme["card"]};
     }}
 
-    .main-title {{
-        font-size: 44px;
-        font-weight: 800;
-        margin-bottom: 5px;
-    }}
-
-    .subtitle {{
-        font-size: 17px;
-        opacity: 0.7;
+    .hero {{
+        background-color: {theme["card"]};
+        padding: 30px;
+        border-radius: 18px;
+        border: 1px solid {theme["accent"]};
         margin-bottom: 25px;
     }}
 
     .story-card {{
         background-color: {theme["card"]};
-        padding: 28px;
-        border-radius: 18px;
-        border-left: 5px solid {theme["primary"]};
+        padding: 25px;
+        border-radius: 15px;
+        border-left: 5px solid {theme["accent"]};
         line-height: 1.8;
-        margin: 20px 0;
     }}
 
     .scene-card {{
         background-color: {theme["card"]};
-        padding: 22px;
-        border-radius: 16px;
-        border-left: 5px solid {theme["primary"]};
+        padding: 20px;
+        border-radius: 15px;
+        border-left: 4px solid {theme["accent"]};
         margin-bottom: 20px;
     }}
 
-    .feature-card {{
-        background-color: {theme["card"]};
-        padding: 20px;
-        border-radius: 16px;
-        text-align: center;
-    }}
-
-    div.stButton > button {{
+    .status-box {{
+        padding: 15px;
         border-radius: 12px;
-        font-weight: 600;
-        min-height: 45px;
+        background-color: {theme["card"]};
+        border: 1px solid {theme["accent"]};
     }}
 
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
+
+
+# ============================================================
+# API STATUS
+# ============================================================
+
+st.sidebar.divider()
+st.sidebar.subheader("🔑 API Configuration")
+
+if GROQ_API_KEY:
+    st.sidebar.success("Groq API: ✓ Connected")
+else:
+    st.sidebar.error("Groq API: ✗ Missing")
+
+if HF_TOKEN:
+    st.sidebar.success("Hugging Face: ✓ Connected")
+else:
+    st.sidebar.error("Hugging Face: ✗ Missing")
+
+if imageio_ffmpeg:
+    st.sidebar.success("FFmpeg: ✓ Available")
+else:
+    st.sidebar.warning(
+        "FFmpeg package unavailable"
+    )
+
+
+# ============================================================
+# AI VIDEO SETTINGS
+# ============================================================
+
+st.sidebar.divider()
+
+st.sidebar.subheader("🤖 AI Video Engine")
+
+hf_provider = st.sidebar.selectbox(
+    "Video Provider",
+    [
+        "fal-ai",
+    ],
+    index=0,
+    help=(
+        "Hugging Face routes the video generation request "
+        "to the selected inference provider."
+    ),
+)
+
+video_model = st.sidebar.text_input(
+    "AI Video Model",
+    value="Wan-AI/Wan2.1-T2V-1.3B",
+)
+
+image_model = st.sidebar.text_input(
+    "AI Image Model",
+    value="stabilityai/stable-diffusion-xl-base-1.0",
+)
+
+video_frames = st.sidebar.slider(
+    "Video Frames",
+    min_value=17,
+    max_value=49,
+    value=33,
+    step=4,
+    help=(
+        "More frames create longer videos but require "
+        "more inference time."
+    ),
+)
+
+video_steps = st.sidebar.slider(
+    "Video Inference Steps",
+    min_value=10,
+    max_value=40,
+    value=25,
+    step=5,
+)
+
+video_guidance = st.sidebar.slider(
+    "Video Guidance",
+    min_value=1.0,
+    max_value=10.0,
+    value=5.0,
+    step=0.5,
+)
+
+# Keep image/video generation manageable.
+scene_count = st.sidebar.slider(
+    "Number of Scenes",
+    min_value=3,
+    max_value=10,
+    value=5,
+    step=1,
+)
+
+story_words = st.sidebar.slider(
+    "Story Length",
+    min_value=300,
+    max_value=1800,
+    value=700,
+    step=100,
+)
+
+narration_language = st.sidebar.selectbox(
+    "Narration Language",
+    [
+        ("English", "en"),
+        ("Hindi", "hi"),
+        ("Spanish", "es"),
+        ("French", "fr"),
+        ("German", "de"),
+    ],
+    format_func=lambda x: x[0],
+)
+
+
+# ============================================================
+# CLIENTS
+# ============================================================
+
+groq_client = None
+
+if GROQ_API_KEY:
+
+    try:
+        groq_client = Groq(
+            api_key=GROQ_API_KEY
+        )
+    except Exception:
+        groq_client = None
+
+
+hf_client = None
+
+if HF_TOKEN and InferenceClient:
+
+    try:
+
+        hf_client = InferenceClient(
+            provider=hf_provider,
+            api_key=HF_TOKEN,
+        )
+
+    except Exception:
+        hf_client = None
 
 
 # ============================================================
@@ -333,205 +330,232 @@ st.markdown(
 # ============================================================
 
 st.markdown(
-    '<div class="main-title">🎬 AI Story, Photo & Cinematic Video Studio</div>',
-    unsafe_allow_html=True
-)
+    """
+    <div class="hero">
 
-st.markdown(
-    '<div class="subtitle">'
-    'Create a story, intelligently divide it into cinematic scenes, '
-    'find relevant visuals, generate narration and assemble a movie.'
-    '</div>',
-    unsafe_allow_html=True
+    <h1>🎬 AI Story & Cinematic Studio</h1>
+
+    <p>
+    Turn an idea into a complete AI-generated cinematic experience.
+    </p>
+
+    <p>
+    ✍️ Story →
+    🎞️ Storyboard →
+    🖼️ AI Images →
+    🤖 AI Video →
+    🎙️ Narration →
+    🎬 Final Movie
+    </p>
+
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# AI TEXT - GEMINI
+# HELPER FUNCTIONS
 # ============================================================
 
-def gemini_generate(prompt):
+def clean_text(value):
+    if value is None:
+        return ""
 
-    if not gemini_client:
+    return str(value).strip()
 
-        raise RuntimeError(
-            "Gemini is not configured."
-        )
 
-    response = gemini_client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        contents=prompt
-    )
+def safe_int(value, default=0):
 
-    if not response:
+    try:
+        return int(value)
 
-        raise RuntimeError(
-            "Gemini returned no response."
-        )
+    except Exception:
+        return default
 
-    text = getattr(
-        response,
-        "text",
-        None
-    )
+
+def extract_json_array(text):
 
     if not text:
-
-        raise RuntimeError(
-            "Gemini returned an empty response."
+        raise ValueError(
+            "Empty AI response."
         )
 
-    return text.strip()
+    text = text.strip()
 
-
-# ============================================================
-# AI TEXT - GROQ
-# ============================================================
-
-def groq_generate(prompt):
-
-    if not groq_client:
-
-        raise RuntimeError(
-            "Groq is not configured."
-        )
-
-    response = groq_client.chat.completions.create(
-
-        model="llama-3.3-70b-versatile",
-
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-
-        temperature=0.8,
-
-        max_tokens=7000
+    # Remove markdown fences.
+    text = re.sub(
+        r"```json",
+        "",
+        text,
+        flags=re.IGNORECASE,
     )
 
-    if not response.choices:
+    text = re.sub(
+        r"```",
+        "",
+        text,
+    )
 
-        raise RuntimeError(
-            "Groq returned no response."
+    match = re.search(
+        r"\[.*\]",
+        text,
+        re.DOTALL,
+    )
+
+    if not match:
+        raise ValueError(
+            "No JSON array was found."
         )
 
-    return response.choices[0].message.content.strip()
+    return json.loads(
+        match.group(0)
+    )
 
 
 # ============================================================
-# AI TEXT WITH FALLBACK
+# GROQ TEXT GENERATION
 # ============================================================
 
-def ai_generate(prompt):
+def generate_with_groq(
+    prompt,
+    max_tokens=6000,
+    temperature=0.7,
+):
 
-    errors = []
+    if groq_client is None:
 
-    if gemini_client:
+        raise RuntimeError(
+            "Groq API is not configured."
+        )
+
+    models = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+    ]
+
+    last_error = None
+
+    for model in models:
 
         try:
 
-            return (
-                gemini_generate(prompt),
-                "Gemini"
+            response = (
+                groq_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
             )
 
-        except Exception as e:
+            if (
+                response.choices
+                and response.choices[0].message.content
+            ):
 
-            errors.append(
-                f"Gemini: {e}"
-            )
+                return (
+                    response
+                    .choices[0]
+                    .message
+                    .content
+                    .strip()
+                )
 
-    if groq_client:
+        except Exception as exc:
 
-        try:
-
-            return (
-                groq_generate(prompt),
-                "Groq"
-            )
-
-        except Exception as e:
-
-            errors.append(
-                f"Groq: {e}"
-            )
+            last_error = exc
 
     raise RuntimeError(
-        "\n\n".join(errors)
-        if errors
-        else
-        "No AI provider is configured."
+        f"Groq generation failed: {last_error}"
     )
 
 
 # ============================================================
-# STORY GENERATION
+# STORY GENERATOR
 # ============================================================
 
-def generate_story(title, words):
+def generate_story(
+    title,
+    words,
+):
 
     prompt = f"""
-You are a professional cinematic storyteller.
+You are a professional cinematic fantasy writer.
 
-Write an ORIGINAL story based on:
+Write a completely original cinematic story.
 
 TITLE:
 {title}
 
-TARGET LENGTH:
-approximately {words} words.
+TARGET WORD COUNT:
+Approximately {words} words.
 
-The story must be highly visual and suitable for conversion
-into a cinematic multi-scene movie.
+The story will be transformed into a multi-scene AI-generated movie.
+
+Therefore the story must contain visually clear events.
 
 Include:
 
-- A memorable protagonist
-- Supporting characters
-- Specific locations
-- Important objects
-- Character actions
-- A clear conflict
-- Escalation
-- A climax
-- A satisfying ending
-- Strong visual details
-- Lighting
-- Weather
-- Atmosphere
-- Creatures or magical elements when appropriate
+1. Main character
+2. Character appearance
+3. Supporting characters
+4. Important locations
+5. Important objects
+6. Character actions
+7. Environmental details
+8. Weather
+9. Lighting
+10. Conflict
+11. Escalation
+12. Major visual turning point
+13. Climax
+14. Emotional resolution
+15. Ending
 
-Avoid vague abstract writing.
+Keep characters visually consistent.
 
-Make important events visually filmable.
+Avoid vague philosophical descriptions.
 
-Do not explain the process.
+Make every major event something an AI video model
+can visually understand.
 
 Return ONLY the story.
 """
 
-    return ai_generate(prompt)
+    return generate_with_groq(
+        prompt,
+        max_tokens=max(
+            3000,
+            words * 3,
+        ),
+        temperature=0.8,
+    )
 
 
 # ============================================================
-# SCENE PLANNING
+# CINEMATIC SCENE PLANNER
 # ============================================================
 
-def create_scene_plan(
+def generate_scene_plan(
     title,
     story,
-    number_of_scenes
+    count,
 ):
 
     prompt = f"""
-You are a professional movie director,
-storyboard artist and cinematographer.
+You are an expert film director,
+cinematographer,
+storyboard artist,
+and AI video prompt engineer.
 
-Turn the COMPLETE story below into EXACTLY
-{number_of_scenes} cinematic scenes.
+Convert the following COMPLETE story into EXACTLY
+{count} cinematic scenes.
 
 TITLE:
 {title}
@@ -539,918 +563,666 @@ TITLE:
 STORY:
 {story}
 
-IMPORTANT:
+IMPORTANT RULES:
 
-Do NOT simply split the story by sentences.
+Do NOT simply split sentences.
 
-Instead identify the important visual events.
+Create meaningful cinematic scenes.
 
-The scenes must cover the entire story,
-including the ending.
+The scenes must cover the entire story from beginning
+to ending.
 
-Maintain character continuity.
+Characters must remain visually consistent.
+
+Each scene must contain a clear physical action.
+
+Each scene must be suitable for AI text-to-video generation.
+
+The video model needs concrete descriptions.
 
 For every scene create:
 
-1. Scene number
-2. Scene title
-3. Detailed description
-4. Characters
-5. Location
-6. Important objects
-7. Character actions
-8. Lighting
-9. Image search query
-10. Video search query
-11. Narration
+number
+title
+description
+characters
+location
+objects
+action
+lighting
+camera
+image_prompt
+video_prompt
+narration
 
-IMAGE QUERY:
+IMAGE PROMPT:
 
-Must describe visible things.
+Describe exactly what the camera sees.
 
-VIDEO QUERY:
+VIDEO PROMPT:
 
-Must describe visible movement/action.
+Describe what physically moves.
 
-Do not use abstract concepts.
+Include:
 
-BAD:
-"magical hope and emotional transformation"
+camera movement
+character movement
+environment movement
+lighting changes
+facial expressions
+important objects
 
-GOOD:
-"young woman standing beside glowing ancient doorway in forest"
+Avoid:
 
-Return EXACTLY this format:
+text
+subtitles
+logos
+watermarks
+abstract concepts
 
-SCENE|1|TITLE|DESCRIPTION|CHARACTERS|LOCATION|OBJECTS|ACTION|LIGHTING|IMAGE_QUERY|VIDEO_QUERY|NARRATION
+Use cinematic film language.
 
-SCENE|2|TITLE|DESCRIPTION|CHARACTERS|LOCATION|OBJECTS|ACTION|LIGHTING|IMAGE_QUERY|VIDEO_QUERY|NARRATION
+Return ONLY valid JSON.
 
-Do not use the | symbol inside fields.
+Example:
+
+[
+  {{
+    "number": 1,
+    "title": "Entering the Forest",
+    "description": "...",
+    "characters": "...",
+    "location": "...",
+    "objects": "...",
+    "action": "...",
+    "lighting": "...",
+    "camera": "...",
+    "image_prompt": "...",
+    "video_prompt": "...",
+    "narration": "..."
+  }}
+]
 """
 
-    result, _ = ai_generate(prompt)
+    raw = generate_with_groq(
+        prompt,
+        max_tokens=10000,
+        temperature=0.5,
+    )
+
+    data = extract_json_array(
+        raw
+    )
+
+    if not isinstance(
+        data,
+        list,
+    ):
+
+        raise ValueError(
+            "Scene planner returned invalid data."
+        )
 
     scenes = []
 
-    for line in result.splitlines():
+    for index, item in enumerate(data):
 
-        line = line.strip()
-
-        if not line.startswith("SCENE|"):
+        if not isinstance(
+            item,
+            dict,
+        ):
             continue
 
-        parts = line.split("|")
+        scene_number = index + 1
 
-        if len(parts) < 12:
-            continue
+        scene = {
+            "number": scene_number,
 
-        try:
+            "title": clean_text(
+                item.get(
+                    "title",
+                    f"Scene {scene_number}",
+                )
+            ),
 
-            number = int(
-                parts[1].strip()
+            "description": clean_text(
+                item.get(
+                    "description",
+                    "",
+                )
+            ),
+
+            "characters": clean_text(
+                item.get(
+                    "characters",
+                    "",
+                )
+            ),
+
+            "location": clean_text(
+                item.get(
+                    "location",
+                    "",
+                )
+            ),
+
+            "objects": clean_text(
+                item.get(
+                    "objects",
+                    "",
+                )
+            ),
+
+            "action": clean_text(
+                item.get(
+                    "action",
+                    "",
+                )
+            ),
+
+            "lighting": clean_text(
+                item.get(
+                    "lighting",
+                    "",
+                )
+            ),
+
+            "camera": clean_text(
+                item.get(
+                    "camera",
+                    "",
+                )
+            ),
+
+            "image_prompt": clean_text(
+                item.get(
+                    "image_prompt",
+                    "",
+                )
+            ),
+
+            "video_prompt": clean_text(
+                item.get(
+                    "video_prompt",
+                    "",
+                )
+            ),
+
+            "narration": clean_text(
+                item.get(
+                    "narration",
+                    "",
+                )
+            ),
+        }
+
+        # ----------------------------------------------------
+        # Make sure prompts are never empty.
+        # ----------------------------------------------------
+
+        if not scene["image_prompt"]:
+
+            scene["image_prompt"] = (
+                f"Cinematic movie still of "
+                f"{scene['description']}. "
+                f"Characters: {scene['characters']}. "
+                f"Location: {scene['location']}. "
+                f"Action: {scene['action']}. "
+                f"Lighting: {scene['lighting']}. "
+                f"Professional fantasy film, "
+                f"high detail, widescreen."
             )
 
-        except Exception:
+        if not scene["video_prompt"]:
 
-            number = len(scenes) + 1
+            scene["video_prompt"] = (
+                f"Cinematic AI-generated movie shot. "
+                f"{scene['description']} "
+                f"{scene['action']} "
+                f"Characters move naturally. "
+                f"Environment moves naturally. "
+                f"{scene['camera']} "
+                f"{scene['lighting']}. "
+                f"Smooth cinematic camera motion."
+            )
 
-        scenes.append({
+        if not scene["narration"]:
 
-            "number": number,
+            scene["narration"] = (
+                scene["description"]
+            )
 
-            "title": parts[2].strip(),
-
-            "description": parts[3].strip(),
-
-            "characters": parts[4].strip(),
-
-            "location": parts[5].strip(),
-
-            "objects": parts[6].strip(),
-
-            "action": parts[7].strip(),
-
-            "lighting": parts[8].strip(),
-
-            "image_query": parts[9].strip(),
-
-            "video_query": parts[10].strip(),
-
-            "narration": parts[11].strip()
-        })
-
-    # --------------------------------------------------------
-    # FALLBACK SCENE CREATION
-    # --------------------------------------------------------
+        scenes.append(
+            scene
+        )
 
     if not scenes:
 
-        sentences = re.split(
-            r'(?<=[.!?])\s+',
-            story
+        raise ValueError(
+            "No scenes were generated."
         )
 
-        sentences = [
-            x.strip()
-            for x in sentences
-            if len(x.strip()) > 15
-        ]
+    # Ensure requested count.
+    if len(scenes) > count:
 
-        if not sentences:
-            sentences = [story]
+        scenes = scenes[:count]
 
-        total = len(sentences)
-
-        for i in range(number_of_scenes):
-
-            start = int(
-                i * total / number_of_scenes
-            )
-
-            end = int(
-                (i + 1) * total / number_of_scenes
-            )
-
-            description = " ".join(
-                sentences[start:end]
-            )
-
-            if not description:
-                description = story
-
-            scenes.append({
-
-                "number": i + 1,
-
-                "title":
-                    f"Scene {i + 1}",
-
-                "description":
-                    description,
-
-                "characters":
-                    title,
-
-                "location":
-                    "cinematic environment",
-
-                "objects":
-                    "important story objects",
-
-                "action":
-                    description,
-
-                "lighting":
-                    "cinematic lighting",
-
-                "image_query":
-                    title,
-
-                "video_query":
-                    title,
-
-                "narration":
-                    description
-            })
-
-    return scenes[:number_of_scenes]
+    return scenes
 
 
 # ============================================================
-# PIXABAY IMAGE SEARCH
+# AI IMAGE GENERATION
 # ============================================================
 
-def search_pixabay_image(query):
-
-    if not PIXABAY_API_KEY:
-        return None
-
-    try:
-
-        response = requests.get(
-            "https://pixabay.com/api/",
-            params={
-                "key": PIXABAY_API_KEY,
-                "q": query[:100],
-                "image_type": "photo",
-                "orientation": "horizontal",
-                "safesearch": "true",
-                "per_page": 20
-            },
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        hits = data.get(
-            "hits",
-            []
-        )
-
-        if not hits:
-            return None
-
-        # Prefer large images
-        hits.sort(
-            key=lambda x:
-                x.get("imageWidth", 0),
-            reverse=True
-        )
-
-        for hit in hits:
-
-            url = (
-                hit.get("largeImageURL")
-                or hit.get("webformatURL")
-            )
-
-            if url:
-
-                return {
-                    "url": url,
-                    "page": hit.get(
-                        "pageURL",
-                        ""
-                    ),
-                    "query": query
-                }
-
-    except Exception:
-        return None
-
-    return None
-
-
-# ============================================================
-# PIXABAY VIDEO SEARCH
-# ============================================================
-
-def search_pixabay_video(query):
-
-    if not PIXABAY_API_KEY:
-        return None
-
-    try:
-
-        response = requests.get(
-            "https://pixabay.com/api/videos/",
-            params={
-                "key": PIXABAY_API_KEY,
-                "q": query[:100],
-                "video_type": "film",
-                "safesearch": "true",
-                "per_page": 20
-            },
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        hits = data.get(
-            "hits",
-            []
-        )
-
-        if not hits:
-            return None
-
-        for hit in hits:
-
-            videos = hit.get(
-                "videos",
-                {}
-            )
-
-            for quality in [
-                "large",
-                "medium",
-                "small"
-            ]:
-
-                video = videos.get(
-                    quality
-                )
-
-                if not video:
-                    continue
-
-                url = video.get(
-                    "url"
-                )
-
-                if url:
-
-                    return {
-                        "url": url,
-                        "page": hit.get(
-                            "pageURL",
-                            ""
-                        ),
-                        "query": query
-                    }
-
-    except Exception:
-        return None
-
-    return None
-
-
-# ============================================================
-# DOWNLOAD IMAGE
-# ============================================================
-
-def download_image(url):
-
-    try:
-
-        response = requests.get(
-            url,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        return Image.open(
-            BytesIO(
-                response.content
-            )
-        ).convert("RGB")
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# FIT IMAGE
-# ============================================================
-
-def fit_image(
-    image,
-    target_size
+def generate_ai_image(
+    prompt,
 ):
 
-    width, height = target_size
+    if hf_client is None:
 
-    ratio = max(
-        width / image.width,
-        height / image.height
-    )
-
-    new_size = (
-        int(image.width * ratio),
-        int(image.height * ratio)
-    )
-
-    image = image.resize(
-        new_size,
-        Image.Resampling.LANCZOS
-    )
-
-    left = (
-        image.width - width
-    ) // 2
-
-    top = (
-        image.height - height
-    ) // 2
-
-    return image.crop(
-        (
-            left,
-            top,
-            left + width,
-            top + height
+        return None, (
+            "Hugging Face client unavailable."
         )
-    )
+
+    enhanced_prompt = f"""
+Cinematic fantasy movie still.
+
+{prompt}
+
+Professional cinematography.
+Photorealistic cinematic detail.
+Beautiful composition.
+Detailed environment.
+Consistent character appearance.
+Natural anatomy.
+Natural hands.
+Expressive faces.
+Atmospheric depth.
+Volumetric lighting.
+Film-quality color grading.
+Widescreen composition.
+
+Absolutely no text.
+No captions.
+No subtitles.
+No logos.
+No watermark.
+"""
+
+    try:
+
+        image = hf_client.text_to_image(
+            enhanced_prompt,
+            model=image_model,
+        )
+
+        if image is not None:
+
+            return image, None
+
+        return None, (
+            "The image provider returned no image."
+        )
+
+    except Exception as exc:
+
+        return None, str(exc)
 
 
 # ============================================================
-# FONT
+# AI VIDEO GENERATION
 # ============================================================
 
-def get_font(size):
-
-    possible_fonts = [
-
-        "/usr/share/fonts/truetype/dejavu/"
-        "DejaVuSans-Bold.ttf",
-
-        "/usr/share/fonts/truetype/liberation2/"
-        "LiberationSans-Bold.ttf",
-
-        "C:/Windows/Fonts/arialbd.ttf"
-    ]
-
-    for path in possible_fonts:
-
-        if os.path.exists(path):
-
-            try:
-
-                return ImageFont.truetype(
-                    path,
-                    size
-                )
-
-            except Exception:
-                pass
-
-    return ImageFont.load_default()
-
-
-# ============================================================
-# CINEMATIC POSTER
-# ============================================================
-
-def create_poster(
-    title,
-    images
+def generate_ai_video(
+    prompt,
+    seed=None,
 ):
 
-    if not images:
-        return None
-
-    width = 1600
-    height = 900
-
-    canvas = Image.new(
-        "RGB",
-        (width, height),
-        "#111111"
-    )
-
-    main = download_image(
-        images[0]["url"]
-    )
-
-    if not main:
-        return None
-
-    main = fit_image(
-        main,
-        (width, height)
-    )
-
-    main = ImageEnhance.Color(
-        main
-    ).enhance(1.2)
-
-    main = ImageEnhance.Contrast(
-        main
-    ).enhance(1.08)
-
-    canvas.paste(
-        main,
-        (0, 0)
-    )
-
-    # --------------------------------------------------------
-    # Overlay
-    # --------------------------------------------------------
-
-    overlay = Image.new(
-        "RGBA",
-        (width, height),
-        (0, 0, 0, 0)
-    )
-
-    draw = ImageDraw.Draw(
-        overlay
-    )
-
-    draw.rectangle(
-        (0, 0, width, height),
-        fill=(0, 0, 0, 85)
-    )
-
-    draw.rectangle(
-        (0, 560, width, height),
-        fill=(0, 0, 0, 175)
-    )
-
-    canvas = Image.alpha_composite(
-        canvas.convert("RGBA"),
-        overlay
-    ).convert("RGB")
-
-    draw = ImageDraw.Draw(
-        canvas
-    )
-
-    # --------------------------------------------------------
-    # Title
-    # --------------------------------------------------------
-
-    draw.text(
-        (60, 590),
-        title,
-        font=get_font(65),
-        fill="white",
-        stroke_width=2,
-        stroke_fill="black"
-    )
-
-    draw.text(
-        (65, 680),
-        "A CINEMATIC AI STORY",
-        font=get_font(25),
-        fill="#DDDDDD"
-    )
-
-    # --------------------------------------------------------
-    # Thumbnail strip
-    # --------------------------------------------------------
-
-    thumbnail_width = 200
-    thumbnail_height = 115
-
-    x = 60
-    y = 755
-
-    for index, item in enumerate(
-        images[:6]
-    ):
-
-        img = download_image(
-            item["url"]
-        )
-
-        if not img:
-            continue
-
-        thumb = fit_image(
-            img,
-            (
-                thumbnail_width,
-                thumbnail_height
-            )
-        )
-
-        canvas.paste(
-            thumb,
-            (x, y)
-        )
-
-        x += 220
-
-        if x > 1300:
-            break
-
-    output = BytesIO()
-
-    canvas.save(
-        output,
-        format="JPEG",
-        quality=95
-    )
-
-    output.seek(0)
-
-    return output.getvalue()
-
-
-# ============================================================
-# FFMPEG
-# ============================================================
-
-def get_ffmpeg():
-
-    if imageio_ffmpeg is None:
+    if hf_client is None:
 
         raise RuntimeError(
-            "FFmpeg is not installed. "
-            "Add imageio-ffmpeg to requirements.txt."
+            "Hugging Face client unavailable."
         )
 
-    try:
+    enhanced_prompt = f"""
+Create a cinematic AI-generated video.
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
+SCENE:
 
-    except Exception as e:
+{prompt}
 
-        raise RuntimeError(
-            f"Could not locate FFmpeg: {e}"
-        )
+VISUAL STYLE:
 
+High-quality cinematic fantasy film.
+Professional movie cinematography.
+Natural character motion.
+Natural environmental motion.
+Physically believable movement.
+Detailed faces.
+Detailed clothing.
+Atmospheric depth.
+Volumetric lighting.
+Film-quality composition.
 
-# ============================================================
-# DOWNLOAD VIDEO
-# ============================================================
+CAMERA:
 
-def download_video(
-    url,
-    output_path
-):
+Smooth cinematic camera movement.
+Professional lens.
+Natural depth of field.
+Controlled motion.
 
-    try:
+DO NOT INCLUDE:
 
-        response = requests.get(
-            url,
-            stream=True,
-            timeout=120
-        )
+text
+subtitles
+captions
+logos
+watermarks
+UI
+static slideshow
+still photograph
+human stock footage
+existing movie footage
 
-        response.raise_for_status()
+This must be a newly AI-generated moving video scene.
+"""
 
-        with open(
-            output_path,
-            "wb"
-        ) as file:
-
-            for chunk in response.iter_content(
-                1024 * 1024
-            ):
-
-                if chunk:
-                    file.write(chunk)
-
-        return True
-
-    except Exception:
-        return False
-
-
-# ============================================================
-# NORMALIZE VIDEO
-# ============================================================
-
-def normalize_video(
-    input_path,
-    output_path,
-    duration
-):
-
-    ffmpeg = get_ffmpeg()
-
-    command = [
-
-        ffmpeg,
-
-        "-y",
-
-        "-i",
-        input_path,
-
-        "-t",
-        str(duration),
-
-        "-vf",
-        (
-            "scale=1280:720:"
-            "force_original_aspect_ratio=decrease,"
-            "pad=1280:720:(ow-iw)/2:(oh-ih)/2"
-        ),
-
-        "-r",
-        "25",
-
-        "-an",
-
-        "-c:v",
-        "libx264",
-
-        "-preset",
-        "veryfast",
-
-        "-pix_fmt",
-        "yuv420p",
-
-        output_path
+    negative_prompt = [
+        "text",
+        "subtitle",
+        "caption",
+        "logo",
+        "watermark",
+        "static image",
+        "slideshow",
+        "stock footage",
+        "deformed anatomy",
+        "extra fingers",
+        "duplicate people",
+        "flickering",
+        "blurry",
+        "low quality",
     ]
 
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=240
-    )
-
-    return (
-        result.returncode == 0
-        and os.path.exists(
-            output_path
-        )
-    )
-
-
-# ============================================================
-# CREATE MULTI-SCENE VIDEO
-# ============================================================
-
-def create_movie(
-    videos,
-    duration
-):
-
-    if not videos:
-        return None
-
-    temp_dir = tempfile.mkdtemp(
-        prefix="cinematic_movie_"
-    )
-
     try:
 
-        normalized = []
+        video = hf_client.text_to_video(
+            enhanced_prompt,
+            model=video_model,
+            guidance_scale=video_guidance,
+            negative_prompt=negative_prompt,
+            num_frames=video_frames,
+            num_inference_steps=video_steps,
+            seed=seed,
+        )
 
-        # ----------------------------------------------------
-        # Download each scene
-        # ----------------------------------------------------
+        if not video:
 
-        for index, video in enumerate(videos):
-
-            raw = os.path.join(
-                temp_dir,
-                f"raw_{index}.mp4"
+            raise RuntimeError(
+                "The AI video provider returned no video."
             )
 
-            clean = os.path.join(
-                temp_dir,
-                f"scene_{index}.mp4"
+        return video
+
+    except TypeError:
+
+        # Some provider/model versions may not accept
+        # every optional argument.
+
+        video = hf_client.text_to_video(
+            enhanced_prompt,
+            model=video_model,
+            guidance_scale=video_guidance,
+            num_frames=video_frames,
+        )
+
+        if not video:
+
+            raise RuntimeError(
+                "The AI video provider returned no video."
             )
 
-            if not download_video(
-                video["url"],
-                raw
-            ):
-                continue
-
-            if normalize_video(
-                raw,
-                clean,
-                duration
-            ):
-
-                normalized.append(
-                    clean
-                )
-
-        if not normalized:
-            return None
-
-        # ----------------------------------------------------
-        # Create concat file
-        # ----------------------------------------------------
-
-        concat = os.path.join(
-            temp_dir,
-            "concat.txt"
-        )
-
-        with open(
-            concat,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            for path in normalized:
-
-                path = path.replace(
-                    "'",
-                    "'\\''"
-                )
-
-                f.write(
-                    f"file '{path}'\n"
-                )
-
-        final_path = os.path.join(
-            temp_dir,
-            "movie.mp4"
-        )
-
-        ffmpeg = get_ffmpeg()
-
-        command = [
-
-            ffmpeg,
-
-            "-y",
-
-            "-f",
-            "concat",
-
-            "-safe",
-            "0",
-
-            "-i",
-            concat,
-
-            "-c",
-            "copy",
-
-            final_path
-        ]
-
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=300
-        )
-
-        if (
-            result.returncode != 0
-            or not os.path.exists(final_path)
-        ):
-
-            return None
-
-        with open(
-            final_path,
-            "rb"
-        ) as f:
-
-            return f.read()
-
-    finally:
-
-        shutil.rmtree(
-            temp_dir,
-            ignore_errors=True
-        )
+        return video
 
 
 # ============================================================
-# GENERATE TTS
+# GENERATE ALL AI IMAGES
 # ============================================================
 
-def create_audio(
-    text,
-    lang
-):
-
-    output = BytesIO()
-
-    tts = gTTS(
-        text=text,
-        lang=lang,
-        slow=False
-    )
-
-    tts.write_to_fp(
-        output
-    )
-
-    output.seek(0)
-
-    return output.read()
-
-
-# ============================================================
-# SCENE AUDIO
-# ============================================================
-
-def create_scene_audio(
+def generate_all_images(
     scenes,
-    lang
 ):
 
     results = []
 
+    total = len(scenes)
+
     progress = st.progress(
         0,
-        text="Creating narration..."
+        text="Preparing AI scene images...",
     )
+
+    for index, scene in enumerate(scenes):
+
+        number = safe_int(
+            scene.get(
+                "number",
+            ),
+            index + 1,
+        )
+
+        title = scene.get(
+            "title",
+            f"Scene {number}",
+        )
+
+        progress.progress(
+            index / total,
+            text=(
+                f"Generating AI image "
+                f"for Scene {number}/{total}..."
+            ),
+        )
+
+        image, error = generate_ai_image(
+            scene.get(
+                "image_prompt",
+                "",
+            )
+        )
+
+        result = {
+            "scene": number,
+            "title": title,
+            "image": image,
+            "error": error,
+        }
+
+        results.append(
+            result
+        )
+
+        if error:
+
+            st.session_state.generation_errors.append(
+                f"Scene {number} image: {error}"
+            )
+
+    progress.progress(
+        1.0,
+        text="AI scene images completed ✓",
+    )
+
+    return results
+
+
+# ============================================================
+# GENERATE ALL AI VIDEOS
+# ============================================================
+
+def generate_all_videos(
+    scenes,
+):
+
+    results = []
 
     total = len(scenes)
 
-    for index, scene in enumerate(
-        scenes
-    ):
+    progress = st.progress(
+        0,
+        text="Starting AI video generation...",
+    )
+
+    for index, scene in enumerate(scenes):
+
+        number = safe_int(
+            scene.get(
+                "number",
+            ),
+            index + 1,
+        )
+
+        title = scene.get(
+            "title",
+            f"Scene {number}",
+        )
+
+        progress.progress(
+            index / total,
+            text=(
+                f"AI-generating Scene "
+                f"{number}/{total}..."
+            ),
+        )
 
         try:
 
-            audio = create_audio(
-                scene["narration"],
-                lang
+            # Different deterministic seed per scene.
+            seed = (
+                int(time.time())
+                + number * 1009
+            )
+
+            video_bytes = generate_ai_video(
+                scene.get(
+                    "video_prompt",
+                    "",
+                ),
+                seed=seed,
             )
 
             results.append({
-
-                "scene":
-                    scene["number"],
-
-                "title":
-                    scene["title"],
-
-                "text":
-                    scene["narration"],
-
-                "audio":
-                    audio
+                "scene": number,
+                "title": title,
+                "video": video_bytes,
+                "prompt": scene.get(
+                    "video_prompt",
+                    "",
+                ),
+                "error": None,
+                "source": "AI",
             })
 
-        except Exception as e:
+        except Exception as exc:
 
-            st.warning(
-                f"Scene {scene['number']} "
-                f"narration failed: {e}"
+            error_message = str(
+                exc
+            )
+
+            st.session_state.generation_errors.append(
+                f"Scene {number} video: {error_message}"
+            )
+
+            results.append({
+                "scene": number,
+                "title": title,
+                "video": None,
+                "prompt": scene.get(
+                    "video_prompt",
+                    "",
+                ),
+                "error": error_message,
+                "source": "AI",
+            })
+
+        progress.progress(
+            (index + 1) / total,
+            text=(
+                f"AI video generation "
+                f"{index + 1}/{total}"
+            ),
+        )
+
+    return results
+
+
+# ============================================================
+# GENERATE NARRATION
+# ============================================================
+
+def generate_all_narration(
+    scenes,
+    language,
+):
+
+    results = []
+
+    total = len(scenes)
+
+    progress = st.progress(
+        0,
+        text="Creating narration...",
+    )
+
+    for index, scene in enumerate(scenes):
+
+        number = safe_int(
+            scene.get(
+                "number",
+            ),
+            index + 1,
+        )
+
+        text = clean_text(
+            scene.get(
+                "narration",
+                scene.get(
+                    "description",
+                    "",
+                ),
+            )
+        )
+
+        try:
+
+            buffer = BytesIO()
+
+            tts = gTTS(
+                text=text,
+                lang=language,
+                slow=False,
+            )
+
+            tts.write_to_fp(
+                buffer
+            )
+
+            audio_bytes = buffer.getvalue()
+
+            results.append({
+                "scene": number,
+                "title": scene.get(
+                    "title",
+                    "",
+                ),
+                "text": text,
+                "audio": audio_bytes,
+            })
+
+        except Exception as exc:
+
+            st.session_state.generation_errors.append(
+                f"Scene {number} narration: {exc}"
             )
 
         progress.progress(
@@ -1458,1107 +1230,1550 @@ def create_scene_audio(
             text=(
                 f"Narration "
                 f"{index + 1}/{total}"
-            )
+            ),
         )
 
     return results
 
 
 # ============================================================
-# COMBINE AUDIO FILES
+# GET FFMPEG
 # ============================================================
 
-def combine_audio_files(
-    audio_items
+def get_ffmpeg():
+
+    if imageio_ffmpeg is None:
+
+        raise RuntimeError(
+            "imageio-ffmpeg is not installed. "
+            "Add imageio-ffmpeg to requirements.txt."
+        )
+
+    try:
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            f"FFmpeg could not be located: {exc}"
+        )
+
+
+# ============================================================
+# WRITE TEMP FILE
+# ============================================================
+
+def write_temp_file(
+    directory,
+    filename,
+    data,
 ):
 
-    if not audio_items:
-        return None
+    path = os.path.join(
+        directory,
+        filename,
+    )
+
+    with open(
+        path,
+        "wb",
+    ) as file:
+
+        file.write(
+            data
+        )
+
+    return path
+
+
+# ============================================================
+# COMBINE AI VIDEOS
+# ============================================================
+
+def combine_ai_videos(
+    video_items,
+):
+
+    usable = []
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # Every item is validated before using ["scene"].
+    # This fixes the previous x["scene"] error.
+    # --------------------------------------------------------
+
+    for item in video_items:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        scene_number = safe_int(
+            item.get(
+                "scene",
+            ),
+            0,
+        )
+
+        video = item.get(
+            "video",
+        )
+
+        if scene_number <= 0:
+            continue
+
+        if not video:
+            continue
+
+        usable.append(
+            (
+                scene_number,
+                video,
+            )
+        )
+
+    if not usable:
+
+        raise RuntimeError(
+            "No AI-generated videos are available "
+            "to combine."
+        )
+
+    # Sort by scene.
+    usable.sort(
+        key=lambda x: x[0]
+    )
+
+    ffmpeg = get_ffmpeg()
 
     temp_dir = tempfile.mkdtemp(
-        prefix="story_audio_"
+        prefix="ai_movie_",
     )
 
     try:
 
-        files = []
+        scene_files = []
 
-        for index, item in enumerate(
-            audio_items
-        ):
+        # ----------------------------------------------------
+        # Write individual videos.
+        # ----------------------------------------------------
 
-            path = os.path.join(
+        for scene_number, video in usable:
+
+            path = write_temp_file(
                 temp_dir,
-                f"audio_{index}.mp3"
+                f"scene_{scene_number}.mp4",
+                video,
             )
 
-            with open(
-                path,
-                "wb"
-            ) as f:
+            scene_files.append(
+                path
+            )
 
-                f.write(
-                    item["audio"]
-                )
+        # ----------------------------------------------------
+        # Create concat file.
+        # ----------------------------------------------------
 
-            files.append(path)
-
-        concat = os.path.join(
+        concat_file = os.path.join(
             temp_dir,
-            "audio.txt"
+            "concat.txt",
         )
 
         with open(
-            concat,
+            concat_file,
             "w",
-            encoding="utf-8"
-        ) as f:
+            encoding="utf-8",
+        ) as file:
 
-            for path in files:
+            for path in scene_files:
 
-                path = path.replace(
+                safe_path = path.replace(
                     "'",
-                    "'\\''"
+                    "'\\''",
                 )
 
-                f.write(
-                    f"file '{path}'\n"
+                file.write(
+                    f"file '{safe_path}'\n"
                 )
 
-        output_path = os.path.join(
+        output_file = os.path.join(
             temp_dir,
-            "full_narration.mp3"
+            "final_movie.mp4",
         )
 
-        ffmpeg = get_ffmpeg()
+        # ----------------------------------------------------
+        # First try stream copy.
+        # ----------------------------------------------------
 
         command = [
-
             ffmpeg,
-
             "-y",
-
             "-f",
             "concat",
-
             "-safe",
             "0",
-
             "-i",
-            concat,
-
-            "-c:a",
-            "libmp3lame",
-
-            output_path
+            concat_file,
+            "-c",
+            "copy",
+            output_file,
         ]
 
         result = subprocess.run(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=300
+            timeout=600,
         )
+
+        # ----------------------------------------------------
+        # If stream copy fails, re-encode.
+        # ----------------------------------------------------
 
         if (
             result.returncode != 0
-            or not os.path.exists(output_path)
+            or not os.path.exists(
+                output_file
+            )
         ):
 
-            return None
+            command = [
+                ffmpeg,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_file,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                output_file,
+            ]
+
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=600,
+            )
+
+        if (
+            result.returncode != 0
+            or not os.path.exists(
+                output_file
+            )
+        ):
+
+            error_text = (
+                result.stderr
+                .decode(
+                    "utf-8",
+                    errors="ignore",
+                )
+            )
+
+            raise RuntimeError(
+                "Could not combine AI videos.\n"
+                + error_text[-2000:]
+            )
 
         with open(
-            output_path,
-            "rb"
-        ) as f:
+            output_file,
+            "rb",
+        ) as file:
 
-            return f.read()
+            return file.read()
 
     finally:
 
-        shutil.rmtree(
-            temp_dir,
-            ignore_errors=True
-        )
+        # Clean temporary files.
+        try:
+
+            for filename in os.listdir(
+                temp_dir
+            ):
+
+                path = os.path.join(
+                    temp_dir,
+                    filename,
+                )
+
+                if os.path.isfile(
+                    path
+                ):
+
+                    os.remove(
+                        path
+                    )
+
+            os.rmdir(
+                temp_dir
+            )
+
+        except Exception:
+            pass
 
 
 # ============================================================
-# COMBINE VIDEO + AUDIO
+# COMBINE AUDIO
 # ============================================================
 
-def add_narration_to_video(
-    video_bytes,
-    audio_bytes
+def combine_audio(
+    audio_items,
 ):
 
-    if not video_bytes or not audio_bytes:
+    usable = []
+
+    for item in audio_items:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        scene = safe_int(
+            item.get(
+                "scene",
+            ),
+            0,
+        )
+
+        audio = item.get(
+            "audio",
+        )
+
+        if scene <= 0:
+            continue
+
+        if not audio:
+            continue
+
+        usable.append(
+            (
+                scene,
+                audio,
+            )
+        )
+
+    if not usable:
+
         return None
 
+    usable.sort(
+        key=lambda x: x[0]
+    )
+
+    ffmpeg = get_ffmpeg()
+
     temp_dir = tempfile.mkdtemp(
-        prefix="narrated_movie_"
+        prefix="ai_audio_",
     )
 
     try:
 
-        video_path = os.path.join(
-            temp_dir,
-            "video.mp4"
-        )
+        audio_files = []
 
-        audio_path = os.path.join(
-            temp_dir,
-            "audio.mp3"
-        )
+        for scene, audio in usable:
 
-        output_path = os.path.join(
+            path = write_temp_file(
+                temp_dir,
+                f"scene_{scene}.mp3",
+                audio,
+            )
+
+            audio_files.append(
+                path
+            )
+
+        concat_file = os.path.join(
             temp_dir,
-            "narrated.mp4"
+            "audio_concat.txt",
         )
 
         with open(
-            video_path,
-            "wb"
-        ) as f:
+            concat_file,
+            "w",
+            encoding="utf-8",
+        ) as file:
 
-            f.write(
-                video_bytes
-            )
+            for path in audio_files:
 
-        with open(
-            audio_path,
-            "wb"
-        ) as f:
+                safe_path = path.replace(
+                    "'",
+                    "'\\''",
+                )
 
-            f.write(
-                audio_bytes
-            )
+                file.write(
+                    f"file '{safe_path}'\n"
+                )
 
-        ffmpeg = get_ffmpeg()
+        output_file = os.path.join(
+            temp_dir,
+            "narration.mp3",
+        )
 
         command = [
-
             ffmpeg,
-
             "-y",
-
+            "-f",
+            "concat",
+            "-safe",
+            "0",
             "-i",
-            video_path,
-
-            "-i",
-            audio_path,
-
-            "-map",
-            "0:v:0",
-
-            "-map",
-            "1:a:0",
-
-            "-c:v",
-            "copy",
-
+            concat_file,
             "-c:a",
-            "aac",
-
-            "-shortest",
-
-            output_path
+            "libmp3lame",
+            output_file,
         ]
 
         result = subprocess.run(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=300
+            timeout=600,
         )
 
         if (
             result.returncode != 0
-            or not os.path.exists(output_path)
+            or not os.path.exists(
+                output_file
+            )
         ):
 
             return None
 
         with open(
-            output_path,
-            "rb"
-        ) as f:
+            output_file,
+            "rb",
+        ) as file:
 
-            return f.read()
+            return file.read()
 
     finally:
 
-        shutil.rmtree(
+        try:
+
+            for filename in os.listdir(
+                temp_dir
+            ):
+
+                path = os.path.join(
+                    temp_dir,
+                    filename,
+                )
+
+                if os.path.isfile(
+                    path
+                ):
+
+                    os.remove(
+                        path
+                    )
+
+            os.rmdir(
+                temp_dir
+            )
+
+        except Exception:
+            pass
+
+
+# ============================================================
+# ADD NARRATION TO FINAL MOVIE
+# ============================================================
+
+def add_narration_to_movie(
+    movie_bytes,
+    audio_bytes,
+):
+
+    if not movie_bytes:
+        return None
+
+    if not audio_bytes:
+        return movie_bytes
+
+    ffmpeg = get_ffmpeg()
+
+    temp_dir = tempfile.mkdtemp(
+        prefix="narrated_movie_",
+    )
+
+    try:
+
+        movie_path = write_temp_file(
             temp_dir,
-            ignore_errors=True
+            "movie.mp4",
+            movie_bytes,
         )
 
+        audio_path = write_temp_file(
+            temp_dir,
+            "narration.mp3",
+            audio_bytes,
+        )
+
+        output_path = os.path.join(
+            temp_dir,
+            "narrated_movie.mp4",
+        )
+
+        command = [
+            ffmpeg,
+            "-y",
+            "-i",
+            movie_path,
+            "-i",
+            audio_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=600,
+        )
+
+        if (
+            result.returncode != 0
+            or not os.path.exists(
+                output_path
+            )
+        ):
+
+            return movie_bytes
+
+        with open(
+            output_path,
+            "rb",
+        ) as file:
+
+            return file.read()
+
+    finally:
+
+        try:
+
+            for filename in os.listdir(
+                temp_dir
+            ):
+
+                path = os.path.join(
+                    temp_dir,
+                    filename,
+                )
+
+                if os.path.isfile(
+                    path
+                ):
+
+                    os.remove(
+                        path
+                    )
+
+            os.rmdir(
+                temp_dir
+            )
+
+        except Exception:
+            pass
+
 
 # ============================================================
-# INPUT
+# MAIN INPUT
 # ============================================================
 
-title = st.text_input(
-    "📖 Story Topic / Title",
-    placeholder=(
-        "Example: Elara and the Secret Forest"
-    )
+story_title = st.text_input(
+    "📖 Enter Story Topic or Title",
+    value="Elara and the Secret Forest",
+)
+
+generation_mode = st.radio(
+    "Choose Output",
+    [
+        "📖 Story + AI Images",
+        "🎬 Complete AI Movie",
+    ],
+    horizontal=True,
+)
+
+generate_button = st.button(
+    "🚀 Generate Cinematic Project",
+    type="primary",
+    use_container_width=True,
 )
 
 
 # ============================================================
-# MAIN GENERATE BUTTON
+# GENERATION PIPELINE
 # ============================================================
 
-if st.button(
-    "🚀 Generate Complete Story Project",
-    type="primary",
-    use_container_width=True
-):
+if generate_button:
 
-    if not title.strip():
+    # --------------------------------------------------------
+    # Validate APIs
+    # --------------------------------------------------------
 
-        st.warning(
-            "Please enter a story title."
-        )
-
-        st.stop()
-
-    if not GEMINI_API_KEY and not GROQ_API_KEY:
+    if not GROQ_API_KEY:
 
         st.error(
-            "Please add GEMINI_API_KEY "
-            "or GROQ_API_KEY to Streamlit secrets."
+            "GROQ_API_KEY is missing."
+        )
+
+        st.info(
+            "Add GROQ_API_KEY to Streamlit secrets."
+        )
+
+        st.stop()
+
+    if not HF_TOKEN:
+
+        st.error(
+            "HF_TOKEN is missing."
+        )
+
+        st.info(
+            "Add HF_TOKEN to Streamlit secrets."
+        )
+
+        st.stop()
+
+    if hf_client is None:
+
+        st.error(
+            "Hugging Face client could not be initialized."
         )
 
         st.stop()
 
     # --------------------------------------------------------
-    # Clear previous project
+    # Reset old project
     # --------------------------------------------------------
 
-    for key in [
-        "story",
-        "story_title",
-        "provider",
-        "scenes",
-        "scene_images",
-        "scene_videos",
-        "scene_audio",
-        "poster_bytes",
-        "video_bytes",
-        "narrated_video_bytes",
-        "audio_bytes"
-    ]:
+    st.session_state.story = ""
+    st.session_state.story_title = story_title
+    st.session_state.scenes = []
+    st.session_state.scene_images = []
+    st.session_state.scene_videos = []
+    st.session_state.scene_audio = []
+    st.session_state.full_audio = None
+    st.session_state.final_movie = None
+    st.session_state.generation_errors = []
+    st.session_state.project_ready = False
 
-        if key == "story_title":
-            st.session_state[key] = title
-
-        elif key == "scenes":
-            st.session_state[key] = []
-
-        elif key in [
-            "scene_images",
-            "scene_videos",
-            "scene_audio"
-        ]:
-
-            st.session_state[key] = []
-
-        else:
-
-            st.session_state[key] = None \
-                if key not in [
-                    "story",
-                    "provider"
-                ] else ""
-
-    # --------------------------------------------------------
+    # ========================================================
     # STEP 1
-    # --------------------------------------------------------
+    # ========================================================
 
-    st.subheader(
-        "1️⃣ Writing Story"
+    st.header(
+        "1️⃣ Creating Story"
     )
 
     try:
 
-        progress = st.progress(
+        story_progress = st.progress(
             0,
-            text="Writing cinematic story..."
+            text="AI is writing the story...",
         )
 
-        story, provider = generate_story(
-            title,
-            word_limit
+        story = generate_story(
+            story_title,
+            story_words,
         )
 
         st.session_state.story = story
-        st.session_state.provider = provider
 
-        progress.progress(
-            100,
-            text="Story completed ✓"
+        story_progress.progress(
+            1.0,
+            text="Story completed ✓",
         )
 
-    except Exception as e:
+    except Exception as exc:
 
         st.error(
-            f"Story generation failed:\n\n{e}"
+            f"Story generation failed: {exc}"
         )
 
         st.stop()
 
-    # --------------------------------------------------------
+    # ========================================================
     # STEP 2
-    # --------------------------------------------------------
+    # ========================================================
 
-    st.subheader(
-        "2️⃣ Creating Cinematic Storyboard"
+    st.header(
+        "2️⃣ Creating Cinematic Scenes"
     )
 
     try:
 
-        progress = st.progress(
+        scene_progress = st.progress(
             0,
-            text="Analyzing story..."
+            text="AI is directing the story...",
         )
 
-        scenes = create_scene_plan(
-            title,
+        scenes = generate_scene_plan(
+            story_title,
             story,
-            scene_count
+            scene_count,
         )
 
         st.session_state.scenes = scenes
 
-        progress.progress(
-            100,
-            text=f"{len(scenes)} scenes created ✓"
+        scene_progress.progress(
+            1.0,
+            text=(
+                f"{len(scenes)} cinematic scenes created ✓"
+            ),
         )
 
-        st.session_state.project_generated = True
-
-    except Exception as e:
+    except Exception as exc:
 
         st.error(
-            f"Scene generation failed:\n\n{e}"
+            f"Scene planning failed: {exc}"
         )
 
         st.stop()
 
+    # ========================================================
+    # STEP 3
+    # ========================================================
+
+    st.header(
+        "3️⃣ Generating AI Images"
+    )
+
+    st.session_state.scene_images = (
+        generate_all_images(
+            scenes
+        )
+    )
+
+    # ========================================================
+    # STORY-ONLY MODE
+    # ========================================================
+
+    if generation_mode == "📖 Story + AI Images":
+
+        st.success(
+            "Story and AI images generated."
+        )
+
+        st.session_state.project_ready = True
+
+    # ========================================================
+    # COMPLETE AI MOVIE
+    # ========================================================
+
+    else:
+
+        # ====================================================
+        # STEP 4
+        # ====================================================
+
+        st.header(
+            "4️⃣ Generating AI Video Scenes"
+        )
+
+        st.info(
+            """
+            🤖 Every scene below is being generated
+            as a NEW AI video from its cinematic prompt.
+
+            No Pixabay video.
+            No stock video.
+            No human footage.
+            """
+        )
+
+        st.session_state.scene_videos = (
+            generate_all_videos(
+                scenes
+            )
+        )
+
+        # ====================================================
+        # STEP 5
+        # ====================================================
+
+        st.header(
+            "5️⃣ Generating Narration"
+        )
+
+        st.session_state.scene_audio = (
+            generate_all_narration(
+                scenes,
+                narration_language[1],
+            )
+        )
+
+        # ====================================================
+        # STEP 6
+        # ====================================================
+
+        st.header(
+            "6️⃣ Combining AI Video Scenes"
+        )
+
+        valid_video_count = 0
+
+        for item in st.session_state.scene_videos:
+
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            if item.get(
+                "video"
+            ):
+
+                valid_video_count += 1
+
+        if valid_video_count == 0:
+
+            st.error(
+                """
+                No AI video scenes were returned.
+
+                Check your Hugging Face token,
+                selected provider, model availability,
+                and provider credits.
+                """
+            )
+
+        else:
+
+            st.write(
+                f"AI video scenes available: "
+                f"**{valid_video_count}/{len(scenes)}**"
+            )
+
+            try:
+
+                movie_progress = st.progress(
+                    0,
+                    text="Combining AI-generated scenes...",
+                )
+
+                movie = combine_ai_videos(
+                    st.session_state.scene_videos
+                )
+
+                movie_progress.progress(
+                    1.0,
+                    text="AI movie assembled ✓",
+                )
+
+                st.session_state.final_movie = movie
+
+            except Exception as exc:
+
+                st.session_state.generation_errors.append(
+                    f"Movie assembly: {exc}"
+                )
+
+                st.error(
+                    f"Movie assembly failed: {exc}"
+                )
+
+        # ====================================================
+        # STEP 7
+        # ====================================================
+
+        st.header(
+            "7️⃣ Combining Narration"
+        )
+
+        try:
+
+            full_audio = combine_audio(
+                st.session_state.scene_audio
+            )
+
+            st.session_state.full_audio = (
+                full_audio
+            )
+
+        except Exception as exc:
+
+            st.session_state.generation_errors.append(
+                f"Audio assembly: {exc}"
+            )
+
+        # ====================================================
+        # STEP 8
+        # ====================================================
+
+        if (
+            st.session_state.final_movie
+            and
+            st.session_state.full_audio
+        ):
+
+            st.header(
+                "8️⃣ Creating Final Narrated Movie"
+            )
+
+            try:
+
+                final_movie = (
+                    add_narration_to_movie(
+                        st.session_state.final_movie,
+                        st.session_state.full_audio,
+                    )
+                )
+
+                st.session_state.final_movie = (
+                    final_movie
+                )
+
+            except Exception as exc:
+
+                st.session_state.generation_errors.append(
+                    f"Narrated movie: {exc}"
+                )
+
+        st.session_state.project_ready = True
+
 
 # ============================================================
-# STORY DISPLAY
+# DISPLAY STORY
 # ============================================================
 
 if st.session_state.story:
 
     st.divider()
 
-    st.subheader(
+    st.header(
         f"📖 {st.session_state.story_title}"
     )
 
-    safe_story = html.escape(
+    story_html = (
         st.session_state.story
+        .replace(
+            "\n",
+            "<br>",
+        )
     )
 
     st.markdown(
         f"""
         <div class="story-card">
-            {safe_story.replace(chr(10), "<br>")}
+        {story_html}
         </div>
         """,
-        unsafe_allow_html=True
-    )
-
-    st.caption(
-        f"Generated using {st.session_state.provider}"
+        unsafe_allow_html=True,
     )
 
 
 # ============================================================
-# STORYBOARD DISPLAY
+# DISPLAY SCENES
 # ============================================================
 
 if st.session_state.scenes:
 
     st.divider()
 
-    st.subheader(
-        "🎞️ Cinematic Storyboard"
+    st.header(
+        "🎬 Cinematic Scene Breakdown"
     )
 
-    for scene in st.session_state.scenes:
+    # --------------------------------------------------------
+    # Build SAFE lookups.
+    #
+    # This is deliberately defensive.
+    # It prevents:
+    #
+    # x["scene"]
+    #
+    # from crashing when x is malformed.
+    # --------------------------------------------------------
+
+    image_lookup = {}
+
+    for item in st.session_state.scene_images:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        if "scene" not in item:
+            continue
+
+        scene_number = safe_int(
+            item.get(
+                "scene"
+            ),
+            0,
+        )
+
+        if scene_number <= 0:
+            continue
+
+        image_lookup[
+            scene_number
+        ] = item
+
+    video_lookup = {}
+
+    for item in st.session_state.scene_videos:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        if "scene" not in item:
+            continue
+
+        scene_number = safe_int(
+            item.get(
+                "scene"
+            ),
+            0,
+        )
+
+        if scene_number <= 0:
+            continue
+
+        video_lookup[
+            scene_number
+        ] = item
+
+    audio_lookup = {}
+
+    for item in st.session_state.scene_audio:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        if "scene" not in item:
+            continue
+
+        scene_number = safe_int(
+            item.get(
+                "scene"
+            ),
+            0,
+        )
+
+        if scene_number <= 0:
+            continue
+
+        audio_lookup[
+            scene_number
+        ] = item
+
+    # --------------------------------------------------------
+    # Render scenes.
+    # --------------------------------------------------------
+
+    for index, scene in enumerate(
+        st.session_state.scenes
+    ):
+
+        if not isinstance(
+            scene,
+            dict,
+        ):
+            continue
+
+        number = safe_int(
+            scene.get(
+                "number",
+            ),
+            index + 1,
+        )
+
+        title = scene.get(
+            "title",
+            f"Scene {number}",
+        )
 
         with st.expander(
-            f"🎬 Scene {scene['number']}: "
-            f"{scene['title']}",
-            expanded=False
+            f"🎬 Scene {number}: {title}",
+            expanded=False,
         ):
 
             st.markdown(
-                f"""
-                <div class="scene-card">
-
-                <h3>
-                    {html.escape(scene["title"])}
-                </h3>
-
-                <p>
-                    <b>📖 Description:</b><br>
-                    {html.escape(scene["description"])}
-                </p>
-
-                <p>
-                    <b>👤 Characters:</b>
-                    {html.escape(scene["characters"])}
-                </p>
-
-                <p>
-                    <b>📍 Location:</b>
-                    {html.escape(scene["location"])}
-                </p>
-
-                <p>
-                    <b>🎒 Objects:</b>
-                    {html.escape(scene["objects"])}
-                </p>
-
-                <p>
-                    <b>🏃 Action:</b>
-                    {html.escape(scene["action"])}
-                </p>
-
-                <p>
-                    <b>💡 Lighting:</b>
-                    {html.escape(scene["lighting"])}
-                </p>
-
-                <p>
-                    <b>🖼️ Image query:</b>
-                    {html.escape(scene["image_query"])}
-                </p>
-
-                <p>
-                    <b>🎥 Video query:</b>
-                    {html.escape(scene["video_query"])}
-                </p>
-
-                <p>
-                    <b>🎙️ Narration:</b>
-                    {html.escape(scene["narration"])}
-                </p>
-
-                </div>
-                """,
-                unsafe_allow_html=True
+                '<div class="scene-card">',
+                unsafe_allow_html=True,
             )
 
+            st.markdown(
+                f"### {title}"
+            )
 
-# ============================================================
-# MEDIA CONTROLS
-# ============================================================
+            st.markdown(
+                f"**📖 Description**  \n"
+                f"{scene.get('description', '')}"
+            )
 
-if st.session_state.scenes:
+            st.markdown(
+                f"**👤 Characters**  \n"
+                f"{scene.get('characters', '')}"
+            )
 
-    st.divider()
+            st.markdown(
+                f"**📍 Location**  \n"
+                f"{scene.get('location', '')}"
+            )
 
-    st.subheader(
-        "🎨 Generate Media"
-    )
+            st.markdown(
+                f"**🎭 Action**  \n"
+                f"{scene.get('action', '')}"
+            )
 
-    col1, col2, col3 = st.columns(3)
+            st.markdown(
+                f"**💡 Lighting**  \n"
+                f"{scene.get('lighting', '')}"
+            )
 
+            st.markdown(
+                f"**📷 Camera**  \n"
+                f"{scene.get('camera', '')}"
+            )
 
-    # ========================================================
-    # PHOTO
-    # ========================================================
+            st.markdown(
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
-    with col1:
+            # =================================================
+            # IMAGE + VIDEO
+            # =================================================
 
-        if st.button(
-            "🖼️ Generate Story Photo",
-            use_container_width=True
-        ):
+            col1, col2 = st.columns(
+                2
+            )
 
-            if not PIXABAY_API_KEY:
+            # -------------------------------------------------
+            # IMAGE
+            # -------------------------------------------------
 
-                st.error(
-                    "PIXABAY_API_KEY is missing."
+            with col1:
+
+                st.subheader(
+                    "🖼️ AI Image"
                 )
 
-            else:
-
-                images = []
-
-                progress = st.progress(
-                    0,
-                    text="Searching relevant images..."
+                image_data = image_lookup.get(
+                    number
                 )
 
-                total = len(
-                    st.session_state.scenes
-                )
-
-                for index, scene in enumerate(
-                    st.session_state.scenes
+                if (
+                    isinstance(
+                        image_data,
+                        dict,
+                    )
+                    and
+                    image_data.get(
+                        "image"
+                    )
                 ):
 
-                    query = scene[
-                        "image_query"
-                    ]
-
-                    result = search_pixabay_image(
-                        query
+                    st.image(
+                        image_data["image"],
+                        use_container_width=True,
                     )
 
-                    # --------------------------------------------
-                    # Fallback query
-                    # --------------------------------------------
+                    image_bytes = BytesIO()
 
-                    if not result:
-
-                        fallback_query = (
-                            f"{scene['location']} "
-                            f"{scene['action']}"
-                        )
-
-                        result = search_pixabay_image(
-                            fallback_query
-                        )
-
-                    if result:
-
-                        result["scene"] = (
-                            scene["number"]
-                        )
-
-                        result["title"] = (
-                            scene["title"]
-                        )
-
-                        images.append(
-                            result
-                        )
-
-                    progress.progress(
-                        (index + 1) / total,
-                        text=(
-                            f"Image "
-                            f"{index + 1}/{total}"
-                        )
+                    image_data["image"].save(
+                        image_bytes,
+                        format="PNG",
                     )
 
-                st.session_state.scene_images = images
-
-                if images:
-
-                    with st.spinner(
-                        "Creating cinematic poster..."
-                    ):
-
-                        poster = create_poster(
-                            st.session_state.story_title,
-                            images
-                        )
-
-                    st.session_state.poster_bytes = (
-                        poster
-                    )
-
-                    st.success(
-                        f"{len(images)} relevant scene "
-                        f"images found."
-                    )
-
-                else:
-
-                    st.warning(
-                        "No relevant images were found."
-                    )
-
-
-    # ========================================================
-    # VIDEO
-    # ========================================================
-
-    with col2:
-
-        if st.button(
-            "🎥 Generate Multi-Scene Video",
-            use_container_width=True
-        ):
-
-            if not PIXABAY_API_KEY:
-
-                st.error(
-                    "PIXABAY_API_KEY is missing."
-                )
-
-            elif imageio_ffmpeg is None:
-
-                st.error(
-                    "FFmpeg is not available."
-                )
-
-                st.info(
-                    "Add imageio-ffmpeg to "
-                    "requirements.txt and redeploy."
-                )
-
-            else:
-
-                videos = []
-
-                progress = st.progress(
-                    0,
-                    text="Searching cinematic video clips..."
-                )
-
-                total = len(
-                    st.session_state.scenes
-                )
-
-                for index, scene in enumerate(
-                    st.session_state.scenes
-                ):
-
-                    query = scene[
-                        "video_query"
-                    ]
-
-                    result = search_pixabay_video(
-                        query
-                    )
-
-                    if not result:
-
-                        fallback_query = (
-                            f"{scene['location']} "
-                            f"{scene['action']}"
-                        )
-
-                        result = search_pixabay_video(
-                            fallback_query
-                        )
-
-                    if result:
-
-                        result["scene"] = (
-                            scene["number"]
-                        )
-
-                        result["title"] = (
-                            scene["title"]
-                        )
-
-                        videos.append(
-                            result
-                        )
-
-                    progress.progress(
-                        (index + 1) / total,
-                        text=(
-                            f"Video search "
-                            f"{index + 1}/{total}"
-                        )
-                    )
-
-                st.session_state.scene_videos = (
-                    videos
-                )
-
-                if not videos:
-
-                    st.warning(
-                        "No suitable video clips found."
-                    )
-
-                else:
-
-                    with st.spinner(
-                        "🎬 Downloading and assembling movie..."
-                    ):
-
-                        movie = create_movie(
-                            videos,
-                            clip_duration
-                        )
-
-                    if movie:
-
-                        st.session_state.video_bytes = (
-                            movie
-                        )
-
-                        st.success(
-                            f"Movie created using "
-                            f"{len(videos)} scenes."
-                        )
-
-                        # ----------------------------------------
-                        # Generate scene narration
-                        # ----------------------------------------
-
-                        with st.spinner(
-                            "🎙️ Generating scene narration..."
-                        ):
-
-                            try:
-
-                                audio_items = (
-                                    create_scene_audio(
-                                        st.session_state.scenes,
-                                        narration_language[1]
-                                    )
-                                )
-
-                                st.session_state.scene_audio = (
-                                    audio_items
-                                )
-
-                                full_audio = (
-                                    combine_audio_files(
-                                        audio_items
-                                    )
-                                )
-
-                                st.session_state.audio_bytes = (
-                                    full_audio
-                                )
-
-                                if full_audio:
-
-                                    narrated_movie = (
-                                        add_narration_to_video(
-                                            movie,
-                                            full_audio
-                                        )
-                                    )
-
-                                    st.session_state.narrated_video_bytes = (
-                                        narrated_movie
-                                    )
-
-                            except Exception as e:
-
-                                st.warning(
-                                    f"Narration could not be "
-                                    f"added: {e}"
-                                )
-
-                    else:
-
-                        st.error(
-                            "The video clips could not "
-                            "be assembled."
-                        )
-
-
-    # ========================================================
-    # FULL NARRATION
-    # ========================================================
-
-    with col3:
-
-        if st.button(
-            "🔊 Generate Full Narration",
-            use_container_width=True
-        ):
-
-            with st.spinner(
-                "🎙️ Generating complete narration..."
-            ):
-
-                try:
-
-                    audio = create_audio(
-                        st.session_state.story,
-                        narration_language[1]
-                    )
-
-                    st.session_state.audio_bytes = (
-                        audio
-                    )
-
-                    st.success(
-                        "Full narration created!"
-                    )
-
-                except Exception as e:
-
-                    st.error(
-                        f"Narration failed:\n\n{e}"
-                    )
-
-
-# ============================================================
-# POSTER
-# ============================================================
-
-if st.session_state.poster_bytes:
-
-    st.divider()
-
-    st.subheader(
-        "🖼️ Cinematic Story Poster"
-    )
-
-    st.image(
-        st.session_state.poster_bytes,
-        use_container_width=True
-    )
-
-    st.download_button(
-        "⬇️ Download Story Photo",
-        data=st.session_state.poster_bytes,
-        file_name="cinematic_story_poster.jpg",
-        mime="image/jpeg",
-        use_container_width=True
-    )
-
-
-# ============================================================
-# MOVIE
-# ============================================================
-
-if st.session_state.video_bytes:
-
-    st.divider()
-
-    st.subheader(
-        "🎥 Multi-Scene Movie"
-    )
-
-    st.video(
-        st.session_state.video_bytes
-    )
-
-    st.download_button(
-        "⬇️ Download Multi-Scene Movie",
-        data=st.session_state.video_bytes,
-        file_name="multi_scene_movie.mp4",
-        mime="video/mp4",
-        use_container_width=True
-    )
-
-
-# ============================================================
-# NARRATED MOVIE
-# ============================================================
-
-if st.session_state.narrated_video_bytes:
-
-    st.divider()
-
-    st.subheader(
-        "🎬 Complete Narrated Movie"
-    )
-
-    st.video(
-        st.session_state.narrated_video_bytes
-    )
-
-    st.download_button(
-        "⬇️ Download Narrated Movie",
-        data=st.session_state.narrated_video_bytes,
-        file_name="complete_narrated_movie.mp4",
-        mime="video/mp4",
-        use_container_width=True
-    )
-
-
-# ============================================================
-# AUDIO
-# ============================================================
-
-if st.session_state.audio_bytes:
-
-    st.divider()
-
-    st.subheader(
-        "🎙️ Full Narration"
-    )
-
-    st.audio(
-        st.session_state.audio_bytes,
-        format="audio/mp3"
-    )
-
-    st.download_button(
-        "⬇️ Download Narration",
-        data=st.session_state.audio_bytes,
-        file_name="story_narration.mp3",
-        mime="audio/mp3",
-        use_container_width=True
-    )
-
-
-# ============================================================
-# SCENE MEDIA
-# ============================================================
-
-if (
-    st.session_state.scene_images
-    or
-    st.session_state.scene_videos
-):
-
-    st.divider()
-
-    st.subheader(
-        "🎞️ Scene-by-Scene Media"
-    )
-
-    image_lookup = {
-        x["scene"]: x
-        for x in st.session_state.scene_images
-    }
-
-    video_lookup = {
-        x["scene"]: x
-        for x in st.session_state.scene_videos
-    }
-
-    for scene in st.session_state.scenes:
-
-        number = scene["number"]
-
-        with st.expander(
-            f"🎬 Scene {number}: "
-            f"{scene['title']}"
-        ):
-
-            left, right = st.columns(2)
-
-            with left:
-
-                if number in image_lookup:
-
-                    image_data = (
-                        image_lookup[number]
-                    )
-
-                    image = download_image(
-                        image_data["url"]
-                    )
-
-                    if image:
-
-                        st.image(
-                            image,
-                            use_container_width=True
-                        )
-
-                    st.caption(
-                        "🖼️ " +
-                        image_data["query"]
+                    st.download_button(
+                        label=(
+                            f"⬇️ Download Scene "
+                            f"{number} Image"
+                        ),
+                        data=image_bytes.getvalue(),
+                        file_name=(
+                            f"scene_{number}.png"
+                        ),
+                        mime="image/png",
+                        key=(
+                            f"download_image_{number}"
+                        ),
                     )
 
                 else:
 
                     st.info(
-                        "No image found."
+                        "AI image unavailable."
                     )
 
-            with right:
+            # -------------------------------------------------
+            # VIDEO
+            # -------------------------------------------------
 
-                if number in video_lookup:
+            with col2:
 
-                    video_data = (
-                        video_lookup[number]
+                st.subheader(
+                    "🤖 AI-Generated Video"
+                )
+
+                video_data = video_lookup.get(
+                    number
+                )
+
+                if (
+                    isinstance(
+                        video_data,
+                        dict,
+                    )
+                    and
+                    video_data.get(
+                        "video"
+                    )
+                ):
+
+                    video_bytes = (
+                        video_data["video"]
                     )
 
                     st.video(
-                        video_data["url"]
+                        video_bytes
+                    )
+
+                    st.download_button(
+                        label=(
+                            f"⬇️ Download AI "
+                            f"Video {number}"
+                        ),
+                        data=video_bytes,
+                        file_name=(
+                            f"ai_scene_{number}.mp4"
+                        ),
+                        mime="video/mp4",
+                        key=(
+                            f"download_video_{number}"
+                        ),
                     )
 
                     st.caption(
-                        "🎥 " +
-                        video_data["query"]
+                        "🤖 Generated by AI"
+                    )
+
+                elif (
+                    isinstance(
+                        video_data,
+                        dict,
+                    )
+                    and
+                    video_data.get(
+                        "error"
+                    )
+                ):
+
+                    st.error(
+                        video_data["error"]
                     )
 
                 else:
 
-                    st.info(
-                        "No video found."
+                    st.warning(
+                        "AI video unavailable for this scene."
                     )
 
-            st.markdown(
-                f"**🎙️ Narration:** "
-                f"{scene['narration']}"
+            # =================================================
+            # AI VIDEO PROMPT
+            # =================================================
+
+            st.markdown("---")
+
+            st.subheader(
+                "🎥 AI Video Prompt"
             )
 
+            st.code(
+                scene.get(
+                    "video_prompt",
+                    "",
+                ),
+                language="text",
+            )
+
+            # =================================================
+            # NARRATION
+            # =================================================
+
+            st.subheader(
+                "🎙️ Narration"
+            )
+
+            narration = scene.get(
+                "narration",
+                "",
+            )
+
+            st.info(
+                narration
+            )
+
+            audio_data = audio_lookup.get(
+                number
+            )
+
+            if (
+                isinstance(
+                    audio_data,
+                    dict,
+                )
+                and
+                audio_data.get(
+                    "audio"
+                )
+            ):
+
+                audio_bytes = (
+                    audio_data["audio"]
+                )
+
+                st.audio(
+                    audio_bytes,
+                    format="audio/mp3",
+                )
+
+                st.download_button(
+                    label=(
+                        f"⬇️ Download Narration "
+                        f"{number}"
+                    ),
+                    data=audio_bytes,
+                    file_name=(
+                        f"scene_{number}_narration.mp3"
+                    ),
+                    mime="audio/mp3",
+                    key=(
+                        f"download_audio_{number}"
+                    ),
+                )
+
 
 # ============================================================
-# PROJECT STATS
+# FINAL MOVIE
 # ============================================================
 
-if st.session_state.story:
+if st.session_state.final_movie:
 
     st.divider()
 
-    st.subheader(
-        "📊 Project Statistics"
+    st.header(
+        "🎬 Complete AI-Generated Movie"
     )
 
-    a, b, c, d = st.columns(4)
+    st.success(
+        "Your multi-scene AI movie is ready."
+    )
 
-    with a:
+    st.video(
+        st.session_state.final_movie
+    )
 
-        st.metric(
-            "Story words",
-            len(
-                st.session_state.story.split()
-            )
-        )
-
-    with b:
-
-        st.metric(
-            "Scenes",
-            len(
-                st.session_state.scenes
-            )
-        )
-
-    with c:
-
-        st.metric(
-            "Images",
-            len(
-                st.session_state.scene_images
-            )
-        )
-
-    with d:
-
-        st.metric(
-            "Video clips",
-            len(
-                st.session_state.scene_videos
-            )
-        )
+    st.download_button(
+        label="⬇️ Download Complete AI Movie",
+        data=st.session_state.final_movie,
+        file_name=(
+            f"{st.session_state.story_title}"
+            .replace(" ", "_")
+            .replace("/", "_")
+            + "_AI_Movie.mp4"
+        ),
+        mime="video/mp4",
+        type="primary",
+        use_container_width=True,
+        key="download_complete_movie",
+    )
 
 
 # ============================================================
-# FOOTER
+# FULL NARRATION
 # ============================================================
 
-st.divider()
+if st.session_state.full_audio:
 
-st.markdown(
-    """
-    <div style="
-        text-align:center;
-        opacity:0.55;
-        padding:20px;
-    ">
-        🎬 AI Story & Cinematic Studio
-        <br>
-        Story • Storyboard • Visuals • Video • Narration
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    st.divider()
+
+    st.header(
+        "🎙️ Complete Narration"
+    )
+
+    st.audio(
+        st.session_state.full_audio,
+        format="audio/mp3",
+    )
+
+    st.download_button(
+        label="⬇️ Download Complete Narration",
+        data=st.session_state.full_audio,
+        file_name="complete_narration.mp3",
+        mime="audio/mp3",
+        key="download_complete_audio",
+    )
+
+
+# ============================================================
+# ERROR REPORT
+# ============================================================
+
+if st.session_state.generation_errors:
+
+    st.divider()
+
+    with st.expander(
+        "⚠️ Generation Diagnostics"
+    ):
+
+        st.warning(
+            "Some components encountered errors."
+        )
+
+        for error in st.session_state.generation_errors:
+
+            st.write(
+                f"• {error}"
+            )
+
+
+# ============================================================
+# PROJECT SUMMARY
+# ============================================================
+
+if st.session_state.project_ready:
+
+    st.divider()
+
+    st.header(
+        "📊 Project Summary"
+    )
+
+    scenes_total = len(
+        st.session_state.scenes
+    )
+
+    images_total = 0
+
+    for item in st.session_state.scene_images:
+
+        if (
+            isinstance(
+                item,
+                dict,
+            )
+            and
+            item.get(
+                "image"
+            )
+        ):
+
+            images_total += 1
+
+    videos_total = 0
+
+    for item in st.session_state.scene_videos:
+
+        if (
+            isinstance(
+                item,
+                dict,
+            )
+            and
+            item.get(
+                "video"
+            )
+        ):
+
+            videos_total += 1
+
+    audio_total = 0
+
+    for item in st.session_state.scene_audio:
+
+        if (
+            isinstance(
+                item,
+                dict,
+            )
+            and
+            item.get(
+                "audio"
+            )
+        ):
+
+            audio_total += 1
+
+    c1, c2, c3, c4 = st.columns(
+        4
+    )
+
+    c1.metric(
+        "🎬 Scenes",
+        scenes_total,
+    )
+
+    c2.metric(
+        "🖼️ AI Images",
+        images_total,
+    )
+
+    c3.metric(
+        "🤖 AI Videos",
+        videos_total,
+    )
+
+    c4.metric(
+        "🎙️ Narrations",
+        audio_total,
+    )
+
+    if videos_total == scenes_total:
+
+        st.success(
+            "🎉 Every scene has an AI-generated video."
+        )
+
+    elif videos_total > 0:
+
+        st.warning(
+            f"{videos_total} of {scenes_total} "
+            "scenes have AI-generated videos."
+        )
+
+    else:
+
+        st.error(
+            "No AI-generated video scenes were produced."
+        )
