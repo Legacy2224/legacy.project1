@@ -108,10 +108,11 @@ def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
         "Write clear, vivid, cinematic sentences."
     )
     
-    # Active production model IDs supported on Groq's free tier
+    # Supported Groq model options
     models_to_try = [
         "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant"
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
     ]
 
     last_error = None
