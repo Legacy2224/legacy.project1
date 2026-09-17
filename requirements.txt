@@ -1,6 +1,7 @@
-streamlit>=1.30.0
-huggingface_hub>=0.20.0
-gTTS>=2.5.0
-Pillow>=10.0.0
-requests>=2.31.0
-groq>=0.9.0
+streamlit
+requests
+Pillow
+gTTS
+groq
+google-genai
+imageio-ffmpeg
