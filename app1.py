@@ -2,34 +2,28 @@ import os
 import json
 import time
 import shutil
-import subprocess
 from pathlib import Path
 
 import requests
 import streamlit as st
 
-
-# ============================================================
-# OPTIONAL PACKAGES
-# ============================================================
-
 try:
     from groq import Groq
-except Exception:
+except ImportError:
     Groq = None
 
 try:
     from gradio_client import Client
-except Exception:
+except ImportError:
     Client = None
 
 
 # ============================================================
-# STREAMLIT CONFIG
+# STREAMLIT
 # ============================================================
 
 st.set_page_config(
-    page_title="AI Story Video Studio",
+    page_title="AI Story Video Generator",
     page_icon="🎬",
     layout="wide"
 )
@@ -41,22 +35,17 @@ st.set_page_config(
 
 HF_SPACE = "Lightricks/ltx-video-distilled"
 
-# Current active Groq model
 GROQ_MODEL = "openai/gpt-oss-20b"
 
 OUTPUT_DIR = Path("generated_story")
-
-OUTPUT_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
-# READ SECRETS
+# SECRETS
 # ============================================================
 
-def get_secret(name, default=""):
+def get_secret(name):
 
     try:
         value = st.secrets.get(name)
@@ -67,51 +56,12 @@ def get_secret(name, default=""):
     except Exception:
         pass
 
-    return os.getenv(
-        name,
-        default
-    ).strip()
+    return os.getenv(name, "").strip()
 
 
-GROQ_API_KEY = get_secret(
-    "GROQ_API_KEY"
-)
-
-HF_TOKEN = get_secret(
-    "HF_TOKEN"
-)
-
-PIXABAY_API_KEY = get_secret(
-    "PIXABAY_API_KEY"
-)
-
-
-# ============================================================
-# PAGE CSS
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-    .main-title {
-        text-align: center;
-        font-size: 46px;
-        font-weight: 800;
-        margin-bottom: 5px;
-    }
-
-    .subtitle {
-        text-align: center;
-        opacity: 0.7;
-        font-size: 18px;
-        margin-bottom: 30px;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+GROQ_API_KEY = get_secret("GROQ_API_KEY")
+HF_TOKEN = get_secret("HF_TOKEN")
+PIXABAY_API_KEY = get_secret("PIXABAY_API_KEY")
 
 
 # ============================================================
@@ -119,14 +69,15 @@ st.markdown(
 # ============================================================
 
 st.markdown(
-    '<div class="main-title">🎬 AI Story Video Studio</div>',
-    unsafe_allow_html=True
-)
+    """
+    <h1 style="text-align:center;">
+    🎬 AI Story Video Generator
+    </h1>
 
-st.markdown(
-    '<div class="subtitle">'
-    'Story → AI storyboard → real video scenes → final MP4'
-    '</div>',
+    <p style="text-align:center;">
+    Story → Scenes → AI Video → Final MP4
+    </p>
+    """,
     unsafe_allow_html=True
 )
 
@@ -140,23 +91,21 @@ with st.sidebar:
     st.header("⚙️ Settings")
 
     visual_style = st.selectbox(
-        "🎨 Visual Style",
+        "Visual Style",
         [
             "Cinematic",
             "Photorealistic",
             "Fantasy",
+            "Dark Fantasy",
             "3D Animation",
             "Anime",
             "Sci-Fi",
-            "Cyberpunk",
-            "Dark Fantasy",
-            "Digital Art",
-            "Comic Book"
+            "Cyberpunk"
         ]
     )
 
     aspect_ratio = st.selectbox(
-        "📐 Aspect Ratio",
+        "Aspect Ratio",
         [
             "16:9",
             "9:16",
@@ -165,149 +114,101 @@ with st.sidebar:
     )
 
     scene_count = st.slider(
-        "🎞️ Number of Scenes",
+        "Number of Scenes",
         1,
         4,
         2
     )
 
     duration = st.slider(
-        "⏱️ Scene Duration",
-        0.5,
+        "Scene Duration",
+        0.3,
         8.0,
         2.0,
-        0.5
-    )
-
-    use_pixabay = st.checkbox(
-        "🖼️ Pixabay Reference Images",
-        True
+        0.1
     )
 
     st.markdown("---")
 
-    st.subheader("🔌 API Status")
+    st.write("API Status")
 
     if GROQ_API_KEY:
         st.success("Groq ✓")
     else:
-        st.error("Groq API missing")
+        st.error("Groq missing")
 
     if HF_TOKEN:
-        st.success("Hugging Face token ✓")
+        st.success("Hugging Face ✓")
     else:
-        st.info(
-            "Hugging Face token optional"
-        )
+        st.info("HF token optional")
 
     if PIXABAY_API_KEY:
         st.success("Pixabay ✓")
     else:
-        st.info(
-            "Pixabay optional"
-        )
+        st.info("Pixabay optional")
 
 
 # ============================================================
-# STORY INPUT
+# INPUT
 # ============================================================
 
-st.subheader("📖 Your Story")
+st.subheader("📖 Story")
 
 story = st.text_area(
-    "Write your story",
-    height=250,
+    "Enter your story",
+    height=220,
     placeholder=(
         "Example:\n\n"
-        "A young woman walks alone through a snow-covered "
-        "forest during a violent winter storm. She eventually "
-        "finds a small clearing with a dying fire. She sits "
-        "beside the fire and warms her hands while snow "
-        "continues falling around her."
+        "Elara enters an ancient forest. "
+        "She follows a mossy path and discovers "
+        "an ancient stone altar covered in glowing runes."
     )
 )
 
 
-# ============================================================
-# CHARACTER
-# ============================================================
+st.subheader("👤 Character")
 
-with st.expander(
-    "👤 Character Description"
-):
-
-    character = st.text_area(
-        "Describe the main character",
-        height=130,
-        placeholder=(
-            "A 24-year-old woman with long dark hair, "
-            "a dark green winter coat, brown boots, "
-            "black gloves and a small leather backpack."
-        )
+character = st.text_area(
+    "Character description",
+    height=120,
+    placeholder=(
+        "Elara is a young woman with long dark hair, "
+        "a green cloak, leather boots and a small backpack."
     )
+)
 
 
-# ============================================================
-# CINEMATIC SETTINGS
-# ============================================================
+st.subheader("🎥 Cinematic Direction")
 
-with st.expander(
-    "🎥 Extra Cinematic Instructions"
-):
-
-    extra_details = st.text_area(
-        "Optional instructions",
-        height=130,
-        placeholder=(
-            "Slow cinematic camera movement, realistic "
-            "lighting, atmospheric particles, natural "
-            "character movement, detailed environment."
-        )
+extra_details = st.text_area(
+    "Optional instructions",
+    height=100,
+    placeholder=(
+        "Slow cinematic camera movement, realistic lighting, "
+        "wind, atmospheric particles and natural character motion."
     )
+)
 
 
 # ============================================================
 # DIMENSIONS
 # ============================================================
 
-def get_dimensions(ratio):
+def get_dimensions():
 
-    if ratio == "16:9":
+    if aspect_ratio == "16:9":
+
         return 512, 704
 
-    if ratio == "9:16":
+    if aspect_ratio == "9:16":
+
         return 704, 512
 
     return 512, 512
 
 
 # ============================================================
-# CLEAN JSON
-# ============================================================
-
-def clean_json(text):
-
-    if not text:
-        raise RuntimeError(
-            "Groq returned an empty response."
-        )
-
-    text = text.strip()
-
-    if text.startswith("```json"):
-        text = text[7:]
-
-    elif text.startswith("```"):
-        text = text[3:]
-
-    if text.endswith("```"):
-        text = text[:-3]
-
-    return text.strip()
-
-
-# ============================================================
-# GROQ STORYBOARD GENERATION
+# GROQ
 # ============================================================
 
 def create_storyboard():
@@ -315,8 +216,7 @@ def create_storyboard():
     if not GROQ_API_KEY:
 
         raise RuntimeError(
-            "GROQ_API_KEY is missing.\n\n"
-            "Add it in Streamlit Secrets."
+            "GROQ_API_KEY is missing."
         )
 
     if Groq is None:
@@ -330,293 +230,146 @@ def create_storyboard():
     )
 
     prompt = f"""
-You are a professional film director,
-storyboard artist and AI video prompt engineer.
+You are an expert film director and AI video prompt engineer.
 
-Turn the following story into exactly
-{scene_count} connected cinematic scenes.
+Turn this story into exactly {scene_count} connected cinematic scenes.
 
 STORY:
+
 {story}
 
-MAIN CHARACTER:
+CHARACTER:
+
 {character}
 
 VISUAL STYLE:
+
 {visual_style}
 
 ASPECT RATIO:
+
 {aspect_ratio}
 
-EXTRA INSTRUCTIONS:
+EXTRA DIRECTION:
+
 {extra_details}
 
-IMPORTANT:
+Create connected scenes.
 
-Every scene must directly represent the story.
+Keep the character consistent between every scene.
 
-The scenes must connect together.
+Every scene must contain:
 
-The same character must remain visually consistent.
+scene_number
+title
+story_action
+video_prompt
+negative_prompt
+pixabay_query
 
-Maintain:
+The video_prompt must describe actual MOVEMENT.
 
-- same face
-- same age
-- same hairstyle
-- same hair color
-- same clothing
-- same accessories
-- same body appearance
+Include:
 
-Each scene must contain:
+character movement
+camera movement
+environment movement
+lighting
+atmosphere
+objects
+beginning of shot
+ending of shot
 
-1. Story action
-2. Detailed video prompt
-3. Negative prompt
-4. Pixabay search query
+Do NOT write image prompts.
 
-The video prompt must describe:
-
-- character movement
-- environmental movement
-- camera movement
-- lighting
-- atmosphere
-- important objects
-- beginning and ending of the shot
-
-Do NOT create static image prompts.
-
-These prompts will be sent directly to
-a text-to-video AI model.
-
-Make the prompts cinematic and highly visual.
+These prompts will be sent directly to a video generation model.
 
 Return ONLY valid JSON.
 
-Use exactly:
+Format:
 
 {{
-    "title": "short story title",
-
-    "character_bible":
-    "detailed character description",
-
+    "title": "story title",
+    "character_bible": "consistent character description",
     "scenes": [
-
         {{
             "scene_number": 1,
-
-            "title":
-            "short scene title",
-
-            "story_action":
-            "what happens",
-
-            "video_prompt":
-            "detailed moving video prompt",
-
-            "negative_prompt":
-            "things to avoid",
-
-            "pixabay_query":
-            "short search query"
+            "title": "scene title",
+            "story_action": "what happens",
+            "video_prompt": "detailed moving video prompt",
+            "negative_prompt": "bad things to avoid",
+            "pixabay_query": "short search query"
         }}
     ]
 }}
 """
 
-    try:
+    response = client.chat.completions.create(
 
-        response = client.chat.completions.create(
+        model=GROQ_MODEL,
 
-            model=GROQ_MODEL,
-
-            messages=[
-
-                {
-                    "role": "system",
-                    "content":
-                    "You are a professional "
-                    "storyboard generator. "
-                    "Return JSON only."
-                },
-
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-
-            ],
-
-            temperature=0.25,
-
-            response_format={
-                "type": "json_object"
+        messages=[
+            {
+                "role": "system",
+                "content":
+                "Return JSON only."
             },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
 
-            max_tokens=7000
-        )
+        temperature=0.2,
 
-    except Exception as e:
+        response_format={
+            "type": "json_object"
+        },
 
-        raise RuntimeError(
-            "Groq request failed:\n\n"
-            + str(e)
-        )
-
-    content = (
-        response
-        .choices[0]
-        .message
-        .content
+        max_tokens=7000
     )
 
-    content = clean_json(
-        content
-    )
+    text = response.choices[0].message.content
 
-    try:
+    if text.startswith("```"):
 
-        data = json.loads(
-            content
-        )
+        text = text.replace(
+            "```json",
+            ""
+        ).replace(
+            "```",
+            ""
+        ).strip()
 
-    except Exception as e:
-
-        raise RuntimeError(
-            "Groq returned invalid JSON:\n\n"
-            + str(e)
-            + "\n\n"
-            + content
-        )
-
-    scenes = data.get(
-        "scenes",
-        []
-    )
-
-    if not scenes:
-
-        raise RuntimeError(
-            "No scenes were returned by Groq."
-        )
-
-    return data
-
-
-# ============================================================
-# PIXABAY SEARCH
-# ============================================================
-
-def search_pixabay(query):
-
-    if not PIXABAY_API_KEY:
-        return []
-
-    if not query:
-        return []
-
-    try:
-
-        response = requests.get(
-
-            "https://pixabay.com/api/",
-
-            params={
-                "key": PIXABAY_API_KEY,
-                "q": query,
-                "image_type": "photo",
-                "safesearch": "true",
-                "per_page": 6
-            },
-
-            timeout=20
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        results = []
-
-        for item in data.get(
-            "hits",
-            []
-        ):
-
-            results.append(
-                {
-                    "image":
-                    item.get(
-                        "webformatURL"
-                    ),
-
-                    "large":
-                    item.get(
-                        "largeImageURL"
-                    ),
-
-                    "tags":
-                    item.get(
-                        "tags",
-                        ""
-                    )
-                }
-            )
-
-        return results
-
-    except Exception:
-
-        return []
+    return json.loads(text)
 
 
 # ============================================================
 # HUGGING FACE CLIENT
 # ============================================================
 
-@st.cache_resource(
-    show_spinner=False
-)
+@st.cache_resource
 def get_hf_client():
 
     if Client is None:
 
         raise RuntimeError(
-            "gradio_client is not installed.\n\n"
+            "gradio_client is missing.\n\n"
             "Add gradio_client to requirements.txt."
         )
 
     try:
 
-        # IMPORTANT:
-        #
-        # Current Gradio Client uses:
-        #
-        # token=
-        #
-        # NOT:
-        #
-        # hf_token=
-
         if HF_TOKEN:
 
-            client = Client(
+            return Client(
                 HF_SPACE,
-                token=HF_TOKEN,
-                verbose=False
+                token=HF_TOKEN
             )
 
-        else:
-
-            client = Client(
-                HF_SPACE,
-                verbose=False
-            )
-
-        return client
+        return Client(
+            HF_SPACE
+        )
 
     except Exception as e:
 
@@ -627,57 +380,246 @@ def get_hf_client():
 
 
 # ============================================================
-# GENERATE VIDEO USING LTX
+# IMPORTANT:
+# EXTRACT GRADIO VIDEO RESULT
 # ============================================================
 
-def generate_video(
+def extract_video_result(result):
+
+    """
+    Current LTX Space returns:
+
+        (output_video_path, used_seed)
+
+    But Gradio may represent the file in
+    several different ways.
+
+    This function handles all common cases.
+    """
+
+    st.write(
+        "🔎 Processing Hugging Face response..."
+    )
+
+    # --------------------------------------------------------
+    # Tuple / list
+    # --------------------------------------------------------
+
+    if isinstance(
+        result,
+        (tuple, list)
+    ):
+
+        if len(result) == 0:
+
+            return None
+
+        # Current LTX:
+        #
+        # result[0] = video
+        # result[1] = seed
+
+        video = result[0]
+
+    else:
+
+        video = result
+
+    # --------------------------------------------------------
+    # None
+    # --------------------------------------------------------
+
+    if video is None:
+
+        return None
+
+    # --------------------------------------------------------
+    # String
+    # --------------------------------------------------------
+
+    if isinstance(
+        video,
+        str
+    ):
+
+        return video
+
+    # --------------------------------------------------------
+    # Dict
+    # --------------------------------------------------------
+
+    if isinstance(
+        video,
+        dict
+    ):
+
+        for key in [
+            "path",
+            "video",
+            "url",
+            "value"
+        ]:
+
+            if key in video:
+
+                value = video[key]
+
+                if value:
+
+                    return str(value)
+
+    # --------------------------------------------------------
+    # Gradio FileData
+    # --------------------------------------------------------
+
+    if hasattr(
+        video,
+        "path"
+    ):
+
+        path = getattr(
+            video,
+            "path",
+            None
+        )
+
+        if path:
+
+            return str(path)
+
+    # --------------------------------------------------------
+    # Gradio data object
+    # --------------------------------------------------------
+
+    if hasattr(
+        video,
+        "url"
+    ):
+
+        url = getattr(
+            video,
+            "url",
+            None
+        )
+
+        if url:
+
+            return str(url)
+
+    # --------------------------------------------------------
+    # repr fallback
+    # --------------------------------------------------------
+
+    return str(video)
+
+
+# ============================================================
+# DOWNLOAD / COPY VIDEO
+# ============================================================
+
+def save_video(
+    source,
+    destination
+):
+
+    destination = Path(
+        destination
+    )
+
+    source = str(source)
+
+    # --------------------------------------------------------
+    # LOCAL FILE
+    # --------------------------------------------------------
+
+    if os.path.isfile(source):
+
+        shutil.copy2(
+            source,
+            destination
+        )
+
+        return True
+
+    # --------------------------------------------------------
+    # URL
+    # --------------------------------------------------------
+
+    if source.startswith(
+        "http://"
+    ) or source.startswith(
+        "https://"
+    ):
+
+        response = requests.get(
+            source,
+            timeout=180
+        )
+
+        response.raise_for_status()
+
+        destination.write_bytes(
+            response.content
+        )
+
+        return True
+
+    return False
+
+
+# ============================================================
+# GENERATE VIDEO
+# ============================================================
+
+def generate_scene_video(
     prompt,
     negative_prompt,
     duration_seconds,
-    ratio,
     seed,
-    status_box
+    status
 ):
 
     client = get_hf_client()
 
-    height, width = get_dimensions(
-        ratio
+    height, width = get_dimensions()
+
+    status.info(
+        "🔗 Connected to LTX Video..."
     )
 
-    status_box.info(
-        "🔗 Connected to Hugging Face LTX Video..."
-    )
-
-    # --------------------------------------------------------
+    # ========================================================
     # CURRENT LTX API
-    # --------------------------------------------------------
+    # ========================================================
     #
-    # Current public Space expects:
-    #
-    # 1 prompt
-    # 2 negative prompt
-    # 3 image
-    # 4 video
-    # 5 height
-    # 6 width
-    # 7 mode
-    # 8 duration
-    # 9 frames to use
-    # 10 seed
-    # 11 randomize seed
-    # 12 guidance scale
-    # 13 improve texture
-    #
-    # Endpoint:
+    # The current Space has:
     #
     # /text_to_video
     #
-    # --------------------------------------------------------
+    # and accepts:
+    #
+    # prompt
+    # negative_prompt
+    # input image
+    # input video
+    # height
+    # width
+    # mode
+    # duration
+    # frames
+    # seed
+    # randomize seed
+    # guidance scale
+    # improve texture
+    #
+    # ========================================================
 
     try:
 
-        job = client.submit(
+        status.info(
+            "🎥 Sending scene to LTX..."
+        )
+
+        result = client.predict(
 
             prompt,
 
@@ -708,422 +650,156 @@ def generate_video(
             api_name="/text_to_video"
         )
 
-        status_box.info(
-            "⏳ LTX is generating the actual video..."
+    except Exception as e:
+
+        raise RuntimeError(
+            "Hugging Face video request failed:\n\n"
+            + str(e)
         )
 
-        result = job.result()
-
-    except Exception as first_error:
-
-        # ----------------------------------------------------
-        # FALLBACK TO PREDICT
-        # ----------------------------------------------------
-
-        try:
-
-            status_box.warning(
-                "🔄 Retrying video request..."
-            )
-
-            result = client.predict(
-
-                prompt,
-
-                negative_prompt,
-
-                None,
-
-                None,
-
-                int(height),
-
-                int(width),
-
-                "text-to-video",
-
-                float(duration_seconds),
-
-                9,
-
-                int(seed),
-
-                False,
-
-                1.0,
-
-                True,
-
-                api_name="/text_to_video"
-            )
-
-        except Exception as second_error:
-
-            raise RuntimeError(
-                "LTX Video generation failed.\n\n"
-
-                "First attempt:\n"
-                + str(first_error)
-
-                + "\n\n"
-
-                "Second attempt:\n"
-                + str(second_error)
-            )
-
     # ========================================================
-    # EXTRACT RESULT
+    # EXTRACT VIDEO
     # ========================================================
 
-    video_path = None
+    video_source = extract_video_result(
+        result
+    )
 
-    if isinstance(
-        result,
-        (list, tuple)
-    ):
-
-        if len(result) > 0:
-
-            video_path = result[0]
-
-    else:
-
-        video_path = result
-
-    # ========================================================
-    # GRADIO FILE DATA
-    # ========================================================
-
-    if hasattr(
-        video_path,
-        "path"
-    ):
-
-        video_path = (
-            video_path.path
-        )
-
-    elif isinstance(
-        video_path,
-        dict
-    ):
-
-        video_path = (
-            video_path.get("path")
-            or video_path.get("url")
-        )
-
-    if not video_path:
+    if not video_source:
 
         raise RuntimeError(
             "Hugging Face returned no video."
         )
 
-    status_box.success(
-        "✅ Actual video generated."
-    )
+    # ========================================================
+    # CHECK LOCAL PATH
+    # ========================================================
 
-    return str(
-        video_path
-    )
-
-
-# ============================================================
-# SAVE GENERATED VIDEO
-# ============================================================
-
-def save_video(
-    source,
-    destination
-):
-
-    destination = Path(
-        destination
-    )
-
-    # Local file
-
-    if source and Path(
-        str(source)
-    ).exists():
-
-        shutil.copy2(
-            str(source),
-            str(destination)
-        )
-
-        return str(
-            destination
-        )
-
-    # URL
-
-    source_string = str(
-        source
-    )
-
-    if (
-        source_string.startswith(
-            "http://"
-        )
-        or
-        source_string.startswith(
-            "https://"
-        )
+    if os.path.isfile(
+        str(video_source)
     ):
 
-        response = requests.get(
-            source_string,
-            timeout=180
-        )
+        return str(video_source)
 
-        response.raise_for_status()
+    # ========================================================
+    # SOMETIMES GRADIO RETURNS FILE OBJECT
+    # ========================================================
 
-        destination.write_bytes(
-            response.content
-        )
+    if hasattr(
+        video_source,
+        "path"
+    ):
+
+        path = video_source.path
+
+        if path and os.path.isfile(
+            path
+        ):
+
+            return path
+
+    # ========================================================
+    # URL
+    # ========================================================
+
+    if str(
+        video_source
+    ).startswith(
+        "http"
+    ):
 
         return str(
-            destination
+            video_source
         )
 
+    # ========================================================
+    # NOTHING FOUND
+    # ========================================================
+
     raise RuntimeError(
-        "Could not locate generated video:\n"
-        + source_string
+        "LTX returned a response, but "
+        "no usable video file was found.\n\n"
+        "Returned value:\n\n"
+        + repr(result)
     )
 
 
 # ============================================================
-# FFMPEG CHECK
+# PIXABAY
 # ============================================================
 
-def ffmpeg_available():
+def search_pixabay(query):
+
+    if not PIXABAY_API_KEY:
+
+        return []
+
+    if not query:
+
+        return []
 
     try:
 
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-version"
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+        response = requests.get(
+
+            "https://pixabay.com/api/",
+
+            params={
+                "key": PIXABAY_API_KEY,
+                "q": query,
+                "image_type": "photo",
+                "safesearch": "true",
+                "per_page": 6
+            },
+
+            timeout=20
         )
 
-        return result.returncode == 0
+        data = response.json()
+
+        return data.get(
+            "hits",
+            []
+        )
 
     except Exception:
 
-        return False
+        return []
 
 
 # ============================================================
-# COMBINE VIDEOS
+# PROMPT BUILDER
 # ============================================================
 
-def combine_videos(
-    video_files,
-    output_file
-):
-
-    if not video_files:
-
-        raise RuntimeError(
-            "No scene videos available."
-        )
-
-    if not ffmpeg_available():
-
-        raise RuntimeError(
-            "FFmpeg is not installed.\n\n"
-            "Make sure packages.txt contains:\n"
-            "ffmpeg"
-        )
-
-    output_file = Path(
-        output_file
-    )
-
-    concat_file = (
-        OUTPUT_DIR
-        / "concat.txt"
-    )
-
-    with open(
-        concat_file,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        for video in video_files:
-
-            path = (
-                Path(video)
-                .resolve()
-                .as_posix()
-            )
-
-            f.write(
-                "file '"
-                + path.replace(
-                    "'",
-                    "'\\''"
-                )
-                + "'\n"
-            )
-
-    # --------------------------------------------------------
-    # TRY STREAM COPY
-    # --------------------------------------------------------
-
-    command = [
-
-        "ffmpeg",
-        "-y",
-
-        "-f",
-        "concat",
-
-        "-safe",
-        "0",
-
-        "-i",
-        str(concat_file),
-
-        "-c",
-        "copy",
-
-        str(output_file)
-    ]
-
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-
-    # --------------------------------------------------------
-    # FALLBACK TRANSCODE
-    # --------------------------------------------------------
-
-    if result.returncode != 0:
-
-        command = [
-
-            "ffmpeg",
-            "-y",
-
-            "-f",
-            "concat",
-
-            "-safe",
-            "0",
-
-            "-i",
-            str(concat_file),
-
-            "-c:v",
-            "libx264",
-
-            "-preset",
-            "veryfast",
-
-            "-pix_fmt",
-            "yuv420p",
-
-            "-c:a",
-            "aac",
-
-            str(output_file)
-        ]
-
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-    if result.returncode != 0:
-
-        raise RuntimeError(
-            "FFmpeg failed:\n\n"
-            + result.stderr
-        )
-
-    if not output_file.exists():
-
-        raise RuntimeError(
-            "Final video was not created."
-        )
-
-    return str(
-        output_file
-    )
-
-
-# ============================================================
-# CLEAN OLD OUTPUT
-# ============================================================
-
-def clean_outputs():
-
-    for file in OUTPUT_DIR.glob(
-        "scene_*.mp4"
-    ):
-
-        try:
-            file.unlink()
-        except Exception:
-            pass
-
-    final = (
-        OUTPUT_DIR
-        / "final_story.mp4"
-    )
-
-    if final.exists():
-
-        try:
-            final.unlink()
-        except Exception:
-            pass
-
-
-# ============================================================
-# BUILD FINAL VIDEO PROMPT
-# ============================================================
-
-def build_video_prompt(
+def build_prompt(
     scene,
     character_bible
 ):
 
     return f"""
-Create an actual cinematic moving video.
+Create an actual moving cinematic video.
 
-ORIGINAL STORY:
+STORY:
 
 {story}
 
 
-CHARACTER CONSISTENCY:
+CHARACTER:
 
 {character_bible}
 
 
 CURRENT SCENE:
 
-{scene.get("story_action", "")}
+{scene["story_action"]}
 
 
-DIRECTOR VIDEO PROMPT:
+VIDEO ACTION:
 
-{scene.get("video_prompt", "")}
+{scene["video_prompt"]}
 
 
-VISUAL STYLE:
+STYLE:
 
 {visual_style}
 
@@ -1133,72 +809,36 @@ ASPECT RATIO:
 {aspect_ratio}
 
 
-EXTRA CINEMATIC DIRECTION:
+EXTRA:
 
 {extra_details}
 
 
-CHARACTER CONSISTENCY IS CRITICAL.
-
-Keep the same:
-
-face,
-age,
-hair,
-hair color,
-clothing,
-body,
-accessories,
-overall appearance.
-
-
-ANIMATION:
+IMPORTANT:
 
 The character must move naturally.
 
-The environment must also move naturally.
+The environment must move naturally.
 
-Use realistic physics.
+Camera must move naturally.
 
-Examples:
+Use cinematic composition.
 
-snow falling,
-wind moving clothing,
-trees moving,
-fire flickering,
-smoke rising,
-dust floating,
-water moving,
-hair moving in wind,
-particles passing through the camera.
+Use realistic lighting.
 
+Use atmospheric particles.
 
-CAMERA:
+Preserve character identity.
 
-Use appropriate cinematic movement.
+Preserve clothing.
 
-Examples:
+Preserve hairstyle.
 
-slow tracking shot,
-dolly shot,
-push-in,
-pull-back,
-side tracking,
-handheld cinematic movement,
-establishing shot.
+Preserve age.
 
+Preserve body appearance.
 
-LIGHTING:
-
-Use cinematic lighting appropriate
-to the scene.
-
-
-IMPORTANT:
-
-This MUST be an actual moving video.
-
-Do NOT create a still photograph.
+Do NOT create a still image.
 
 Do NOT create a slideshow.
 
@@ -1212,38 +852,37 @@ Do NOT add watermarks.
 
 Do NOT introduce unrelated characters.
 
-Do NOT introduce unrelated objects.
+Do NOT change the character.
 
-Do NOT change the character's clothing.
-
-Do NOT change the character's appearance.
-
-
-The video must visually represent
-the current scene from the story.
+This must be an actual moving video.
 """
 
 
 # ============================================================
-# GENERATE BUTTON
+# CLEAN OLD FILES
 # ============================================================
 
-generate_button = st.button(
+def clean_old_files():
+
+    for file in OUTPUT_DIR.glob(
+        "*.mp4"
+    ):
+
+        try:
+            file.unlink()
+        except Exception:
+            pass
+
+
+# ============================================================
+# MAIN BUTTON
+# ============================================================
+
+if st.button(
     "🚀 GENERATE COMPLETE VIDEO",
     type="primary",
     use_container_width=True
-)
-
-
-# ============================================================
-# MAIN GENERATION
-# ============================================================
-
-if generate_button:
-
-    # --------------------------------------------------------
-    # VALIDATION
-    # --------------------------------------------------------
+):
 
     if not story.strip():
 
@@ -1261,19 +900,7 @@ if generate_button:
 
         st.stop()
 
-    if Client is None:
-
-        st.error(
-            "gradio_client is not installed."
-        )
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # CLEAN
-    # --------------------------------------------------------
-
-    clean_outputs()
+    clean_old_files()
 
     # ========================================================
     # STEP 1
@@ -1283,22 +910,14 @@ if generate_button:
         "🧠 Step 1 — Creating Storyboard"
     )
 
-    storyboard_status = st.empty()
-
-    storyboard_status.info(
-        "Groq is analyzing your story..."
-    )
-
     try:
 
-        storyboard = (
-            create_storyboard()
-        )
+        storyboard = create_storyboard()
 
     except Exception as e:
 
-        storyboard_status.error(
-            "❌ Storyboard generation failed."
+        st.error(
+            "Storyboard generation failed."
         )
 
         st.code(
@@ -1307,13 +926,9 @@ if generate_button:
 
         st.stop()
 
-    storyboard_status.success(
+    st.success(
         "✅ Storyboard created."
     )
-
-    # --------------------------------------------------------
-    # STORY INFO
-    # --------------------------------------------------------
 
     title = storyboard.get(
         "title",
@@ -1334,43 +949,25 @@ if generate_button:
         "🎬 " + title
     )
 
-    with st.expander(
-        "👤 Character Bible"
-    ):
-
-        st.write(
-            character_bible
-        )
-
-    # ========================================================
-    # STORYBOARD
-    # ========================================================
-
-    st.subheader(
-        "🎞️ Scenes"
+    st.write(
+        character_bible
     )
+
+    # ========================================================
+    # SCENES
+    # ========================================================
 
     for scene in scenes:
 
-        number = scene.get(
-            "scene_number",
-            "?"
-        )
-
-        scene_title = scene.get(
-            "title",
-            "Scene"
-        )
-
         st.markdown(
-            f"### 🎬 Scene {number}: {scene_title}"
+            f"""
+            ## 🎬 Scene {scene["scene_number"]}:
+            {scene["title"]}
+            """
         )
 
         st.write(
-            scene.get(
-                "story_action",
-                ""
-            )
+            scene["story_action"]
         )
 
     # ========================================================
@@ -1378,54 +975,34 @@ if generate_button:
     # ========================================================
 
     st.header(
-        "🎥 Step 2 — Creating Actual Videos"
+        "🎥 Step 2 — Generating Actual Videos"
     )
 
-    st.info(
-        "The prompts below are being sent to "
-        "the Hugging Face LTX text-to-video model."
-    )
+    progress = st.progress(0)
 
-    total = len(
-        scenes
-    )
+    generated_files = []
 
-    progress = st.progress(
-        0
-    )
-
-    video_files = []
-
-    # ========================================================
-    # GENERATE EACH SCENE
-    # ========================================================
+    total = len(scenes)
 
     for index, scene in enumerate(
         scenes
     ):
 
-        number = scene.get(
-            "scene_number",
-            index + 1
-        )
+        number = scene["scene_number"]
 
-        scene_title = scene.get(
-            "title",
-            f"Scene {number}"
-        )
+        title = scene["title"]
 
         st.markdown(
-            f"## 🎬 Scene {number}: {scene_title}"
+            f"""
+            ## 🎬 Scene {number}: {title}
+            """
         )
 
         st.write(
-            scene.get(
-                "story_action",
-                ""
-            )
+            scene["story_action"]
         )
 
-        final_prompt = build_video_prompt(
+        prompt = build_prompt(
             scene,
             character_bible
         )
@@ -1435,7 +1012,7 @@ if generate_button:
         ):
 
             st.write(
-                final_prompt
+                prompt
             )
 
         negative_prompt = scene.get(
@@ -1452,26 +1029,19 @@ if generate_button:
 
         status = st.empty()
 
-        status.info(
-            f"⏳ Generating Scene "
-            f"{number}/{total}..."
-        )
-
         try:
 
-            generated = generate_video(
+            source = generate_scene_video(
 
-                prompt=final_prompt,
+                prompt,
 
-                negative_prompt=negative_prompt,
+                negative_prompt,
 
-                duration_seconds=duration,
+                duration,
 
-                ratio=aspect_ratio,
+                1000 + number,
 
-                seed=1000 + int(number),
-
-                status_box=status
+                status
             )
 
             local_file = (
@@ -1479,55 +1049,54 @@ if generate_button:
                 / f"scene_{number}.mp4"
             )
 
-            save_video(
-                generated,
+            if source != str(
                 local_file
-            )
+            ):
+
+                if not save_video(
+                    source,
+                    local_file
+                ):
+
+                    raise RuntimeError(
+                        "Video was returned, "
+                        "but could not be saved."
+                    )
 
             if not local_file.exists():
 
                 raise RuntimeError(
-                    "The video was generated "
-                    "but could not be saved."
+                    "Video file does not exist."
                 )
 
-            if local_file.stat().st_size < 1000:
+            if local_file.stat().st_size == 0:
 
                 raise RuntimeError(
-                    "The returned video file "
-                    "is empty or invalid."
+                    "Video file is empty."
                 )
 
-            video_files.append(
+            generated_files.append(
                 str(local_file)
             )
 
             status.success(
-                f"✅ Scene {number} completed."
+                f"✅ Scene {number} generated successfully."
             )
-
-            # ------------------------------------------------
-            # SHOW VIDEO
-            # ------------------------------------------------
 
             st.video(
                 str(local_file)
             )
 
-            # ------------------------------------------------
-            # DOWNLOAD SCENE
-            # ------------------------------------------------
-
             with open(
                 local_file,
                 "rb"
-            ) as f:
+            ) as video_file:
 
                 st.download_button(
 
                     f"⬇️ Download Scene {number}",
 
-                    f.read(),
+                    video_file.read(),
 
                     file_name=
                     f"scene_{number}.mp4",
@@ -1536,9 +1105,7 @@ if generate_button:
                     "video/mp4",
 
                     key=
-                    f"scene_download_{number}",
-
-                    use_container_width=True
+                    f"download_{number}"
                 )
 
         except Exception as e:
@@ -1551,143 +1118,194 @@ if generate_button:
                 str(e)
             )
 
-        # ----------------------------------------------------
-        # PIXABAY REFERENCE
-        # ----------------------------------------------------
+        # ====================================================
+        # PIXABAY REFERENCES
+        # ====================================================
 
-        if use_pixabay:
+        if PIXABAY_API_KEY:
 
             query = scene.get(
                 "pixabay_query",
                 ""
             )
 
-            references = search_pixabay(
+            images = search_pixabay(
                 query
             )
 
-            if references:
+            if images:
 
-                with st.expander(
-                    f"🖼️ Scene {number} "
-                    f"Reference Images"
+                st.subheader(
+                    "🖼️ Reference Images"
+                )
+
+                cols = st.columns(3)
+
+                for i, image in enumerate(
+                    images[:6]
                 ):
 
-                    cols = st.columns(3)
+                    with cols[
+                        i % 3
+                    ]:
 
-                    for i, ref in enumerate(
-                        references
-                    ):
+                        url = image.get(
+                            "webformatURL"
+                        )
 
-                        with cols[
-                            i % 3
-                        ]:
+                        if url:
 
-                            if ref.get(
-                                "image"
-                            ):
-
-                                st.image(
-                                    ref["image"],
-                                    use_container_width=True
-                                )
-
-                            if ref.get(
-                                "tags"
-                            ):
-
-                                st.caption(
-                                    ref["tags"]
-                                )
+                            st.image(
+                                url,
+                                use_container_width=True
+                            )
 
         progress.progress(
             (index + 1) / total
         )
-
-        time.sleep(1)
 
     # ========================================================
     # STEP 3
     # ========================================================
 
     st.header(
-        "🎞️ Step 3 — Creating Final Video"
+        "🎞️ Step 3 — Final Video"
     )
 
-    if not video_files:
+    if not generated_files:
 
         st.error(
             "❌ No scenes were successfully generated."
         )
 
-        st.warning(
-            "Hugging Face LTX may currently be busy "
-            "or its public ZeroGPU capacity may be unavailable."
+        st.info(
+            "The Hugging Face Space may be "
+            "temporarily unavailable or out of "
+            "ZeroGPU capacity."
         )
 
         st.stop()
+
+    # ========================================================
+    # ONE SCENE
+    # ========================================================
+
+    if len(generated_files) == 1:
+
+        final_file = Path(
+            generated_files[0]
+        )
+
+    # ========================================================
+    # MULTIPLE SCENES
+    # ========================================================
+
+    else:
+
+        try:
+
+            import subprocess
+
+            concat_file = (
+                OUTPUT_DIR
+                / "concat.txt"
+            )
+
+            with open(
+                concat_file,
+                "w",
+                encoding="utf-8"
+            ) as f:
+
+                for file in generated_files:
+
+                    absolute_path = (
+                        Path(file)
+                        .resolve()
+                        .as_posix()
+                    )
+
+                    f.write(
+                        "file '"
+                        + absolute_path
+                        + "'\n"
+                    )
+
+            final_file = (
+                OUTPUT_DIR
+                / "final_story.mp4"
+            )
+
+            command = [
+
+                "ffmpeg",
+                "-y",
+
+                "-f",
+                "concat",
+
+                "-safe",
+                "0",
+
+                "-i",
+                str(concat_file),
+
+                "-c:v",
+                "libx264",
+
+                "-pix_fmt",
+                "yuv420p",
+
+                "-c:a",
+                "aac",
+
+                str(final_file)
+            ]
+
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            if result.returncode != 0:
+
+                raise RuntimeError(
+                    result.stderr
+                )
+
+        except Exception as e:
+
+            st.warning(
+                "Could not combine scenes."
+            )
+
+            st.code(
+                str(e)
+            )
+
+            st.info(
+                "Individual scene videos "
+                "are still available above."
+            )
+
+            st.stop()
+
+    # ========================================================
+    # FINAL
+    # ========================================================
 
     st.success(
-        f"✅ {len(video_files)} scene(s) generated."
-    )
-
-    final_video = (
-        OUTPUT_DIR
-        / "final_story.mp4"
-    )
-
-    combine_status = st.empty()
-
-    combine_status.info(
-        "🎬 Combining all scenes..."
-    )
-
-    try:
-
-        combine_videos(
-            video_files,
-            final_video
-        )
-
-    except Exception as e:
-
-        combine_status.error(
-            "❌ Could not create final video."
-        )
-
-        st.code(
-            str(e)
-        )
-
-        st.info(
-            "The individual scene videos "
-            "are still available above."
-        )
-
-        st.stop()
-
-    combine_status.success(
-        "🎉 Final video created!"
-    )
-
-    # ========================================================
-    # FINAL VIDEO
-    # ========================================================
-
-    st.header(
-        "🎬 FINAL STORY VIDEO"
+        "🎉 FINAL VIDEO CREATED!"
     )
 
     st.video(
-        str(final_video)
+        str(final_file)
     )
 
-    # ========================================================
-    # DOWNLOAD FINAL
-    # ========================================================
-
     with open(
-        final_video,
+        final_file,
         "rb"
     ) as f:
 
@@ -1709,57 +1327,5 @@ if generate_button:
             use_container_width=True,
 
             key=
-            "final_video_download"
+            "final_download"
         )
-
-    # ========================================================
-    # SUMMARY
-    # ========================================================
-
-    st.markdown("---")
-
-    st.subheader(
-        "📊 Generation Summary"
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-
-        st.metric(
-            "Scenes",
-            len(video_files)
-        )
-
-    with c2:
-
-        st.metric(
-            "Duration / Scene",
-            f"{duration}s"
-        )
-
-    with c3:
-
-        st.metric(
-            "Format",
-            aspect_ratio
-        )
-
-    with c4:
-
-        st.metric(
-            "Style",
-            visual_style
-        )
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.markdown("---")
-
-st.caption(
-    "AI Story Video Studio • "
-    "Groq + Hugging Face LTX Video + Pixabay + FFmpeg"
-)
