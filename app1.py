@@ -9,30 +9,48 @@ import requests
 # ============================================================
 
 st.set_page_config(
-    page_title="AI Story Generator",
-    page_icon="🎨",
+    page_title="AI Story Studio",
+    page_icon="🎬",
     layout="wide"
 )
 
 
 # ============================================================
-# LOAD API KEYS
+# API KEYS
 # ============================================================
 
-def get_secret(name):
+def get_key(name):
     try:
         value = st.secrets.get(name)
+
         if value:
             return str(value)
+
     except Exception:
         pass
 
     return os.getenv(name, "")
 
 
-GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
-GROQ_API_KEY = get_secret("GROQ_API_KEY")
-PIXABAY_API_KEY = get_secret("PIXABAY_API_KEY")
+GEMINI_API_KEY = get_key("GEMINI_API_KEY")
+GROQ_API_KEY = get_key("GROQ_API_KEY")
+PIXABAY_API_KEY = get_key("PIXABAY_API_KEY")
+
+
+# ============================================================
+# GEMINI IMPORT
+# ============================================================
+
+try:
+    from google import genai
+
+    GEMINI_AVAILABLE = True
+    GEMINI_IMPORT_ERROR = ""
+
+except Exception as e:
+    genai = None
+    GEMINI_AVAILABLE = False
+    GEMINI_IMPORT_ERROR = str(e)
 
 
 # ============================================================
@@ -45,16 +63,23 @@ st.markdown(
 
     .title {
         text-align: center;
-        font-size: 45px;
+        font-size: 46px;
         font-weight: 800;
-        margin-top: 20px;
+        margin-top: 15px;
     }
 
     .subtitle {
         text-align: center;
-        color: #777;
         font-size: 18px;
+        color: #777;
         margin-bottom: 30px;
+    }
+
+    .scene-card {
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid rgba(128,128,128,0.25);
+        margin-bottom: 20px;
     }
 
     </style>
@@ -68,13 +93,13 @@ st.markdown(
 # ============================================================
 
 st.markdown(
-    '<div class="title">🎨 AI Story Image Generator</div>',
+    '<div class="title">🎬 AI Story Studio</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
     '<div class="subtitle">'
-    'Create detailed cinematic image prompts from your story'
+    'Turn your story into cinematic AI scenes'
     '</div>',
     unsafe_allow_html=True
 )
@@ -89,7 +114,7 @@ with st.sidebar:
     st.header("⚙️ Settings")
 
     style = st.selectbox(
-        "Image Style",
+        "🎨 Visual Style",
         [
             "Cinematic",
             "Photorealistic",
@@ -100,12 +125,14 @@ with st.sidebar:
             "Sci-Fi",
             "Cyberpunk",
             "Dark Fantasy",
-            "Watercolor"
+            "Comic Book",
+            "Watercolor",
+            "Oil Painting"
         ]
     )
 
     aspect_ratio = st.selectbox(
-        "Aspect Ratio",
+        "📐 Aspect Ratio",
         [
             "1:1",
             "16:9",
@@ -116,7 +143,7 @@ with st.sidebar:
     )
 
     lighting = st.selectbox(
-        "Lighting",
+        "💡 Lighting",
         [
             "Cinematic",
             "Golden Hour",
@@ -129,7 +156,7 @@ with st.sidebar:
     )
 
     camera = st.selectbox(
-        "Camera",
+        "📷 Camera",
         [
             "Wide Shot",
             "Medium Shot",
@@ -142,33 +169,61 @@ with st.sidebar:
         ]
     )
 
+    scene_count = st.slider(
+        "🎞️ Number of Scenes",
+        1,
+        6,
+        3
+    )
+
     use_groq = st.checkbox(
-        "Use Groq Enhancement",
+        "✨ Enhance with Groq",
         value=True
     )
 
     use_pixabay = st.checkbox(
-        "Use Pixabay References",
+        "🖼️ Pixabay References",
         value=True
     )
+
+    st.markdown("---")
+
+    st.subheader("🔌 API Status")
+
+    if GEMINI_API_KEY:
+        st.success("Gemini API ✓")
+    else:
+        st.error("Gemini API ✗")
+
+    if GROQ_API_KEY:
+        st.success("Groq API ✓")
+    else:
+        st.warning("Groq API not configured")
+
+    if PIXABAY_API_KEY:
+        st.success("Pixabay API ✓")
+    else:
+        st.warning("Pixabay API not configured")
 
 
 # ============================================================
 # STORY INPUT
 # ============================================================
 
-st.subheader("📖 Enter Your Story")
+st.subheader("📖 Your Story")
 
 story = st.text_area(
-    "Story / Scene",
-    height=220,
+    "Enter your complete story",
+    height=230,
     placeholder=(
         "Example:\n\n"
         "A young explorer enters an ancient magical forest "
         "at night. The trees glow blue and thousands of "
-        "butterflies surround her. She touches an ancient "
-        "crystal and the entire forest changes from blue "
-        "to purple. A glowing portal appears behind her."
+        "butterflies surround her. She discovers an ancient "
+        "crystal. When she touches it, the entire forest "
+        "slowly changes from blue to purple and golden light. "
+        "A giant glowing portal appears between the trees "
+        "and she walks toward it."
     )
 )
 
@@ -180,210 +235,181 @@ story = st.text_area(
 with st.expander("👤 Character Details"):
 
     character = st.text_area(
-        "Character description",
-        height=120,
+        "Main character description",
+        height=130,
         placeholder=(
-            "Young female explorer, long dark hair, "
-            "brown jacket, backpack, curious expression."
+            "Young female explorer, 22 years old, "
+            "long dark hair, brown leather jacket, "
+            "dark trousers, hiking boots, backpack, "
+            "curious and brave expression."
         )
     )
 
 
 # ============================================================
-# GEMINI FUNCTION
+# GEMINI CLIENT
 # ============================================================
 
-def generate_gemini_prompt():
+def get_gemini_client():
 
     if not GEMINI_API_KEY:
-
         raise Exception(
-            "GEMINI_API_KEY is missing. "
-            "Add it in Streamlit Secrets."
+            "GEMINI_API_KEY is missing."
         )
 
-    try:
-
-        from google import genai
-
-    except Exception as error:
-
+    if not GEMINI_AVAILABLE:
         raise Exception(
-            "google-genai is not installed. "
-            "Add google-genai to requirements.txt."
-        ) from error
+            "google-genai could not be imported.\n\n"
+            + GEMINI_IMPORT_ERROR
+        )
 
-
-    client = genai.Client(
+    return genai.Client(
         api_key=GEMINI_API_KEY
     )
 
 
-    instruction = f"""
-You are an expert cinematic AI image prompt engineer.
+# ============================================================
+# CREATE STORYBOARD
+# ============================================================
 
-Analyze this story carefully:
+def create_storyboard():
+
+    client = get_gemini_client()
+
+    prompt = f"""
+You are a professional cinematic storyboard director.
+
+Analyze the following complete story:
 
 {story}
 
-Character details:
+MAIN CHARACTER:
 
 {character}
 
-Visual style:
+Create exactly {scene_count} connected cinematic scenes.
 
+VISUAL STYLE:
 {style}
 
-Aspect ratio:
-
-{aspect_ratio}
-
-Lighting:
-
+LIGHTING:
 {lighting}
 
-Camera:
-
+CAMERA:
 {camera}
 
-Create a highly detailed image-generation prompt.
+ASPECT RATIO:
+{aspect_ratio}
 
-The image must accurately represent the story.
+IMPORTANT REQUIREMENTS:
 
-Include:
+1. The scenes must tell the complete story.
+2. Keep the same character appearance in every scene.
+3. Keep clothing consistent.
+4. Keep important objects consistent.
+5. Keep the visual style consistent.
+6. Make each scene visually different when the story requires it.
+7. Preserve the story's important details.
+8. Do not add unrelated characters.
+9. Do not add unrelated objects.
+10. Do not add text.
+11. Do not add logos.
+12. Do not add watermarks.
+13. Clearly show transformations.
+14. Clearly show color changes.
+15. Create cinematic compositions.
+16. Describe emotions.
+17. Describe lighting.
+18. Describe environment.
+19. Describe camera angle.
+20. Describe important visual effects.
 
-1. Main subject
-2. Characters
-3. Character appearance
-4. Clothing
-5. Facial expression
-6. Environment
-7. Background
-8. Important objects
-9. Colors
-10. Lighting
-11. Camera angle
-12. Composition
-13. Depth
-14. Atmosphere
-15. Emotion
-16. Special effects
-17. Transformations
-18. Color changes
+If the story says:
 
-If the story contains a color transformation,
-make it visually obvious.
+BLUE → PURPLE
 
-Example:
+the image prompt must clearly describe the visible transformation.
 
-blue forest transforming into purple forest.
+Return ONLY valid JSON.
 
-Do not add unrelated objects.
-
-Do not add text.
-
-Do not add logos.
-
-Do not add watermarks.
-
-Make the result cinematic, creative and visually impressive.
-
-Return ONLY JSON.
-
-Format:
+Use this format:
 
 {{
-    "title": "short title",
-    "prompt": "complete detailed image prompt",
-    "negative_prompt": "negative prompt"
+    "story_title": "title",
+    "character_bible": "fixed appearance of the character",
+    "scenes": [
+        {{
+            "scene_number": 1,
+            "scene_title": "title",
+            "story_action": "what happens",
+            "environment": "environment",
+            "character": "character appearance",
+            "objects": "important objects",
+            "colors": "colors",
+            "lighting": "lighting",
+            "camera": "camera",
+            "image_prompt": "complete cinematic image prompt",
+            "negative_prompt": "negative prompt"
+        }}
+    ]
 }}
 """
 
+    try:
 
-    models = [
-        "gemini-2.5-flash-lite",
-        "gemini-1.5-flash-lite"
-    ]
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=prompt
+        )
 
+    except Exception as e:
 
-    last_error = None
+        raise Exception(
+            "Gemini 2.5 Flash-Lite request failed.\n\n"
+            + str(e)
+        )
 
+    text = response.text or ""
 
-    for model in models:
+    text = text.strip()
 
-        try:
+    if text.startswith("```json"):
+        text = text[7:]
 
-            response = client.models.generate_content(
-                model=model,
-                contents=instruction
-            )
+    if text.startswith("```"):
+        text = text[3:]
 
-            text = response.text or ""
+    if text.endswith("```"):
+        text = text[:-3]
 
-            text = text.strip()
+    text = text.strip()
 
-            text = text.replace(
-                "```json",
-                ""
-            )
+    try:
 
-            text = text.replace(
-                "```",
-                ""
-            )
+        return json.loads(text)
 
-            text = text.strip()
+    except Exception:
 
-
-            try:
-
-                result = json.loads(text)
-
-            except Exception:
-
-                result = {
-                    "title": "AI Generated Scene",
-                    "prompt": text,
-                    "negative_prompt": (
-                        "blurry, low quality, distorted face, "
-                        "bad anatomy, extra fingers, extra limbs, "
-                        "duplicate objects, text, logo, watermark"
-                    )
-                }
-
-
-            result["model_used"] = model
-
-            return result
-
-
-        except Exception as error:
-
-            last_error = error
-
-
-    raise Exception(
-        "Gemini models failed.\n\n"
-        + str(last_error)
-    )
+        raise Exception(
+            "Gemini returned invalid JSON.\n\n"
+            "RAW RESPONSE:\n\n"
+            + text
+        )
 
 
 # ============================================================
-# GROQ FUNCTION
+# GROQ ENHANCEMENT
 # ============================================================
 
-def improve_with_groq(
+def enhance_prompt(
     prompt,
-    negative_prompt
+    negative_prompt,
+    character_bible
 ):
 
     if not GROQ_API_KEY:
 
-        return {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt
-        }
-
+        return prompt, negative_prompt
 
     try:
 
@@ -393,43 +419,50 @@ def improve_with_groq(
             api_key=GROQ_API_KEY
         )
 
-
         instruction = f"""
-Improve this cinematic AI image prompt.
+You are an expert cinematic AI image prompt engineer.
 
-Original prompt:
+CHARACTER BIBLE:
+{character_bible}
 
+ORIGINAL IMAGE PROMPT:
 {prompt}
 
-Negative prompt:
-
+NEGATIVE PROMPT:
 {negative_prompt}
+
+Improve the image prompt.
 
 Improve:
 
 - cinematic composition
-- visual storytelling
-- lighting
-- depth
-- atmosphere
 - character consistency
 - environment
+- lighting
+- atmosphere
+- depth
+- camera
 - colors
-- camera direction
 - visual effects
+- emotional storytelling
+- object placement
 
-Do not change the story.
+Do NOT change the story.
 
-Do not add unrelated objects.
+Do NOT add unrelated characters.
+
+Do NOT add unrelated objects.
+
+If the story contains a color transformation,
+make it visually obvious.
 
 Return ONLY JSON:
 
 {{
-    "prompt": "improved prompt",
+    "prompt": "improved image prompt",
     "negative_prompt": "improved negative prompt"
 }}
 """
-
 
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -439,14 +472,12 @@ Return ONLY JSON:
                     "content": instruction
                 }
             ],
-            temperature=0.3
+            temperature=0.25
         )
-
 
         text = response.choices[
             0
         ].message.content
-
 
         text = text.replace(
             "```json",
@@ -458,29 +489,34 @@ Return ONLY JSON:
             ""
         )
 
-        return json.loads(
+        data = json.loads(
             text.strip()
         )
 
+        return (
+            data.get(
+                "prompt",
+                prompt
+            ),
+            data.get(
+                "negative_prompt",
+                negative_prompt
+            )
+        )
 
     except Exception:
 
-        return {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt
-        }
+        return prompt, negative_prompt
 
 
 # ============================================================
-# PIXABAY FUNCTION
+# PIXABAY SEARCH
 # ============================================================
 
 def search_pixabay(query):
 
     if not PIXABAY_API_KEY:
-
         return []
-
 
     try:
 
@@ -496,13 +532,11 @@ def search_pixabay(query):
             timeout=20
         )
 
-
         response.raise_for_status()
 
         data = response.json()
 
         results = []
-
 
         for item in data.get(
             "hits",
@@ -517,17 +551,11 @@ def search_pixabay(query):
                     "tags": item.get(
                         "tags",
                         ""
-                    ),
-                    "page": item.get(
-                        "pageURL",
-                        ""
                     )
                 }
             )
 
-
         return results
-
 
     except Exception:
 
@@ -539,14 +567,14 @@ def search_pixabay(query):
 # ============================================================
 
 generate = st.button(
-    "✨ GENERATE",
+    "🚀 GENERATE STORY",
     type="primary",
     use_container_width=True
 )
 
 
 # ============================================================
-# MAIN PROCESS
+# MAIN
 # ============================================================
 
 if generate:
@@ -560,158 +588,310 @@ if generate:
         st.stop()
 
 
-    # --------------------------------------------------------
-    # GEMINI
-    # --------------------------------------------------------
+    # ========================================================
+    # CREATE STORYBOARD
+    # ========================================================
 
     with st.spinner(
-        "🧠 Gemini Lite is analyzing your story..."
+        "🧠 Gemini 2.5 Flash-Lite is analyzing your story..."
     ):
 
         try:
 
-            result = generate_gemini_prompt()
+            storyboard = create_storyboard()
 
-        except Exception as error:
+        except Exception as e:
 
             st.error(
-                "Gemini Error"
+                "❌ Gemini Error"
             )
 
             st.code(
-                str(error)
+                str(e)
             )
 
             st.stop()
 
 
-    title = result.get(
-        "title",
-        "AI Generated Scene"
+    # ========================================================
+    # STORY INFORMATION
+    # ========================================================
+
+    story_title = storyboard.get(
+        "story_title",
+        "AI Story"
     )
 
-    image_prompt = result.get(
-        "prompt",
-        ""
+    character_bible = storyboard.get(
+        "character_bible",
+        character
     )
 
-    negative_prompt = result.get(
-        "negative_prompt",
-        ""
-    )
-
-    model_used = result.get(
-        "model_used",
-        "Unknown"
+    scenes = storyboard.get(
+        "scenes",
+        []
     )
 
 
-    # --------------------------------------------------------
-    # GROQ
-    # --------------------------------------------------------
+    if not scenes:
 
-    if use_groq:
+        st.error(
+            "No scenes were returned by Gemini."
+        )
 
-        with st.spinner(
-            "✨ Groq is improving the prompt..."
-        ):
+        st.stop()
 
-            improved = improve_with_groq(
-                image_prompt,
-                negative_prompt
-            )
-
-            image_prompt = improved.get(
-                "prompt",
-                image_prompt
-            )
-
-            negative_prompt = improved.get(
-                "negative_prompt",
-                negative_prompt
-            )
-
-
-    # --------------------------------------------------------
-    # RESULT
-    # --------------------------------------------------------
 
     st.success(
-        "Prompt generated successfully!"
-    )
-
-    st.subheader(
-        "🎬 " + title
-    )
-
-    st.caption(
-        "Gemini model: " + model_used
+        f"🎬 {len(scenes)} scenes created successfully!"
     )
 
 
-    st.markdown(
-        "### 🖼️ Final Image Prompt"
-    )
-
-    st.info(
-        image_prompt
+    st.header(
+        "🎞️ " + story_title
     )
 
 
-    st.markdown(
-        "### 🚫 Negative Prompt"
-    )
+    # ========================================================
+    # CHARACTER BIBLE
+    # ========================================================
 
-    st.code(
-        negative_prompt
-    )
+    with st.expander(
+        "👤 Character Consistency"
+    ):
 
-
-    # --------------------------------------------------------
-    # PIXABAY
-    # --------------------------------------------------------
-
-    if use_pixabay:
-
-        with st.spinner(
-            "🔎 Finding visual references..."
-        ):
-
-            references = search_pixabay(
-                story[:80]
-            )
+        st.write(
+            character_bible
+        )
 
 
-        if references:
+    # ========================================================
+    # PROCESS EACH SCENE
+    # ========================================================
 
-            st.markdown("---")
+    for index, scene in enumerate(
+        scenes
+    ):
 
-            st.subheader(
-                "🖼️ Pixabay References"
-            )
+        scene_number = scene.get(
+            "scene_number",
+            index + 1
+        )
+
+        scene_title = scene.get(
+            "scene_title",
+            f"Scene {scene_number}"
+        )
+
+        story_action = scene.get(
+            "story_action",
+            ""
+        )
+
+        environment = scene.get(
+            "environment",
+            ""
+        )
+
+        objects = scene.get(
+            "objects",
+            ""
+        )
+
+        original_prompt = scene.get(
+            "image_prompt",
+            ""
+        )
+
+        negative_prompt = scene.get(
+            "negative_prompt",
+            ""
+        )
 
 
-            columns = st.columns(3)
+        st.markdown("---")
+
+        st.header(
+            f"🎬 Scene {scene_number}: "
+            f"{scene_title}"
+        )
+
+        st.write(
+            story_action
+        )
 
 
-            for index, item in enumerate(
-                references
+        # ====================================================
+        # GROQ
+        # ====================================================
+
+        if use_groq:
+
+            with st.spinner(
+                f"✨ Improving Scene {scene_number}..."
             ):
 
-                with columns[
-                    index % 3
-                ]:
-
-                    if item["image"]:
-
-                        st.image(
-                            item["image"],
-                            use_container_width=True
-                        )
-
-                    st.caption(
-                        item["tags"]
+                final_prompt, final_negative = (
+                    enhance_prompt(
+                        original_prompt,
+                        negative_prompt,
+                        character_bible
                     )
+                )
+
+        else:
+
+            final_prompt = original_prompt
+
+            final_negative = negative_prompt
+
+
+        # ====================================================
+        # FINAL PROMPT
+        # ====================================================
+
+        final_prompt = f"""
+Cinematic AI image for Scene {scene_number}.
+
+COMPLETE STORY:
+{story}
+
+CHARACTER CONSISTENCY:
+{character_bible}
+
+SCENE ACTION:
+{story_action}
+
+ENVIRONMENT:
+{environment}
+
+IMPORTANT OBJECTS:
+{objects}
+
+IMAGE PROMPT:
+{final_prompt}
+
+VISUAL STYLE:
+{style}
+
+LIGHTING:
+{lighting}
+
+CAMERA:
+{camera}
+
+ASPECT RATIO:
+{aspect_ratio}
+
+IMPORTANT:
+
+Keep the character identical to previous scenes.
+
+Keep clothing consistent.
+
+Keep important objects consistent.
+
+Preserve the story.
+
+Show the environment clearly.
+
+Show emotions clearly.
+
+Show important visual details.
+
+Show color changes clearly.
+
+Show transformations clearly.
+
+Do not add unrelated characters.
+
+Do not add unrelated objects.
+
+Do not add text.
+
+Do not add logos.
+
+Do not add watermarks.
+
+NEGATIVE PROMPT:
+{final_negative}
+"""
+
+
+        # ====================================================
+        # PROMPT DISPLAY
+        # ====================================================
+
+        with st.expander(
+            f"🔍 View Scene {scene_number} Prompt"
+        ):
+
+            st.write(
+                final_prompt
+            )
+
+
+        # ====================================================
+        # NOTE ABOUT IMAGE
+        # ====================================================
+
+        st.info(
+            "🎨 Image prompt ready. "
+            "Connect your image-generation API/model "
+            "to generate the actual image."
+        )
+
+
+        # ====================================================
+        # PIXABAY REFERENCES
+        # ====================================================
+
+        if use_pixabay:
+
+            query = (
+                environment
+                + " "
+                + objects
+            )
+
+
+            references = search_pixabay(
+                query[:100]
+            )
+
+
+            if references:
+
+                with st.expander(
+                    f"🖼️ Visual References — Scene {scene_number}"
+                ):
+
+                    columns = st.columns(3)
+
+
+                    for ref_index, ref in enumerate(
+                        references
+                    ):
+
+                        with columns[
+                            ref_index % 3
+                        ]:
+
+                            if ref.get(
+                                "image"
+                            ):
+
+                                st.image(
+                                    ref["image"],
+                                    use_container_width=True
+                                )
+
+                            st.caption(
+                                ref.get(
+                                    "tags",
+                                    ""
+                                )
+                            )
 
 
 # ============================================================
@@ -721,6 +901,6 @@ if generate:
 st.markdown("---")
 
 st.caption(
-    "AI Story Generator | "
-    "Streamlit + Gemini Lite + Groq + Pixabay"
+    "AI Story Studio • "
+    "Gemini 2.5 Flash-Lite • Groq • Pixabay"
 )
