@@ -1,0 +1,224 @@
+import streamlit as st
+import os
+import io
+import time
+from PIL import Image
+from gtts import gTTS
+from huggingface_hub import InferenceClient
+
+# ---------------------------------------------------------
+# Page Configuration
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="AI Story & Media Studio",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ---------------------------------------------------------
+# Sidebar: Custom Styling & Theme Selection
+# ---------------------------------------------------------
+st.sidebar.title("🎨 Theme & Customization")
+
+theme_choice = st.sidebar.selectbox(
+    "Choose Color Theme",
+    ["Dark Midnight", "Light Elegant", "Cyberpunk Neon", "Enchanted Forest", "Sunset Glow"]
+)
+
+# Theme CSS Dictionary
+THEMES = {
+    "Dark Midnight": {
+        "bg": "#0e1117", "card": "#1e232a", "text": "#ffffff", "accent": "#4A90E2"
+    },
+    "Light Elegant": {
+        "bg": "#f8f9fa", "card": "#ffffff", "text": "#212529", "accent": "#0d6efd"
+    },
+    "Cyberpunk Neon": {
+        "bg": "#050505", "card": "#120024", "text": "#00ffcc", "accent": "#ff007f"
+    },
+    "Enchanted Forest": {
+        "bg": "#0b1d13", "card": "#132a1c", "text": "#e0f2fe", "accent": "#22c55e"
+    },
+    "Sunset Glow": {
+        "bg": "#1a0b1c", "card": "#2d1236", "text": "#fdf2f8", "accent": "#f43f5e"
+    }
+}
+
+active_theme = THEMES[theme_choice]
+
+# Inject Custom CSS
+st.markdown(f"""
+    <style>
+    .stApp {{
+        background-color: {active_theme['bg']};
+        color: {active_theme['text']};
+    }}
+    div[data-testid="stSidebar"] {{
+        background-color: {active_theme['card']};
+    }}
+    .story-card {{
+        background-color: {active_theme['card']};
+        padding: 20px;
+        border-radius: 12px;
+        border-left: 5px solid {active_theme['accent']};
+        margin-bottom: 20px;
+    }}
+    </style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# API Key Handling (Secrets + Sidebar Fallback)
+# ---------------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔑 API Configuration")
+
+hf_token = None
+
+# 1. Attempt to load from Streamlit Secrets
+if "HF_TOKEN" in st.secrets:
+    hf_token = st.secrets["HF_TOKEN"]
+    st.sidebar.success("API Key loaded from Secrets!")
+else:
+    # 2. Fallback to manual sidebar text input
+    hf_token = st.sidebar.text_input(
+        "Hugging Face Token", 
+        type="password", 
+        help="Get a free token at https://huggingface.co/settings/tokens"
+    )
+
+# ---------------------------------------------------------
+# AI Inference Helper Functions
+# ---------------------------------------------------------
+def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
+    """Generates a structured story using Hugging Face's open-access LLMs."""
+    try:
+        client = InferenceClient(api_key=api_key)
+        system_prompt = (
+            f"Write a creative narrative story titled or based on '{prompt}'. "
+            f"The story must be approximately {max_words} words long. "
+            "Write simple, vivid, cinematic sentences."
+        )
+        response = client.text_generation(
+            prompt=system_prompt,
+            model="mistralai/Mistral-7B-Instruct-v0.2",
+            max_new_tokens=max_words * 2,
+            temperature=0.7
+        )
+        return response.strip()
+    except Exception as e:
+        st.error(f"Text Generation Error: {e}")
+        return None
+
+def generate_ai_image(prompt: str, api_key: str) -> Image.Image:
+    """Generates visual artwork using FLUX / Stable Diffusion via Hugging Face."""
+    try:
+        client = InferenceClient(api_key=api_key)
+        enhanced_prompt = f"Digital illustration artwork of {prompt}, fairytale aesthetic, high quality, vibrant"
+        image = client.text_to_image(
+            enhanced_prompt,
+            model="black-forest-labs/FLUX.1-dev"
+        )
+        return image
+    except Exception as e:
+        # Fallback to SDXL if FLUX is busy
+        try:
+            client = InferenceClient(api_key=api_key)
+            image = client.text_to_image(
+                prompt,
+                model="stabilityai/stable-diffusion-xl-base-1.0"
+            )
+            return image
+        except Exception as inner_e:
+            st.error(f"Image Generation Error: {inner_e}")
+            return None
+
+def create_voiceover(text: str) -> io.BytesIO:
+    """Generates voice audio for a line of text using gTTS."""
+    fp = io.BytesIO()
+    tts = gTTS(text=text, lang='en', slow=False)
+    tts.write_to_fp(fp)
+    fp.seek(0)
+    return fp
+
+# ---------------------------------------------------------
+# Main UI Layout
+# ---------------------------------------------------------
+st.title("🎬 AI Story, Photo & Video Studio")
+st.caption("Generate custom stories, AI artwork, and full narration-driven scenes.")
+
+# Input Controls
+col_title, col_limit = st.columns([3, 1])
+with col_title:
+    story_title = st.text_input("Enter Story Topic or Title:", "Snow White")
+with col_limit:
+    word_limit = st.slider("Word Limit:", min_value=50, max_value=500, value=150, step=25)
+
+mode_choice = st.radio(
+    "Choose Output Format:",
+    ["Story & Photo Generator", "Full Cinematic Movie/Video Scene Breakdown"],
+    horizontal=True
+)
+
+generate_btn = st.button("🚀 Generate Studio Content", type="primary", use_container_width=True)
+
+# ---------------------------------------------------------
+# Execution Logic
+# ---------------------------------------------------------
+if generate_btn:
+    if not hf_token:
+        st.warning("Please configure your Hugging Face API Token in secrets or the sidebar to proceed.")
+        st.stop()
+
+    with st.spinner("Writing story narrative..."):
+        story_text = generate_ai_story(story_title, word_limit, hf_token)
+
+    if story_text:
+        # Save to session state
+        st.session_state['current_story'] = story_text
+        st.session_state['story_title'] = story_title
+
+if 'current_story' in st.session_state:
+    story_text = st.session_state['current_story']
+    title = st.session_state['story_title']
+
+    st.markdown("---")
+    st.markdown(f"<div class='story-card'><h2>📖 {title}</h2><p>{story_text}</p></div>", unsafe_allow_html=True)
+
+    # Mode 1: Story & Photo Generation
+    if mode_choice == "Story & Photo Generator":
+        st.subheader("🖼️ AI Story Illustration")
+        with st.spinner("Painting relevant AI photo according to the story..."):
+            image_prompt = f"A scene from {title}: {story_text[:150]}"
+            generated_img = generate_ai_image(image_prompt, hf_token)
+            
+            if generated_img:
+                st.image(generated_img, caption=f"AI Generated Photo for '{title}'", use_column_width=True)
+
+    # Mode 2: Full Cinematic Video Breakdown (Scene by Scene + Audio)
+    elif mode_choice == "Full Cinematic Movie/Video Scene Breakdown":
+        st.subheader("🎥 Cinematic Movie Scene Experience")
+        st.info("Converting every line of the story into audio voiceover, scene visuals, and character actions.")
+
+        # Split story into distinct lines/scenes
+        lines = [line.strip() for line in story_text.split('.') if len(line.strip()) > 5]
+
+        for idx, line in enumerate(lines, 1):
+            st.markdown(f"#### 🎬 Scene {idx}")
+            col_vis, col_aud = st.columns([2, 1])
+
+            with col_vis:
+                # Generate custom photo per scene line
+                scene_img = generate_ai_image(f"{title}, {line}", hf_token)
+                if scene_img:
+                    st.image(scene_img, use_column_width=True)
+
+            with col_aud:
+                st.write(f"**Dialogue / Line:**")
+                st.info(f'"{line}."')
+                
+                # Audio narration for line
+                audio_fp = create_voiceover(line)
+                st.audio(audio_fp, format="audio/mp3")
+
+            st.divider()
