@@ -1,5 +1,4 @@
 streamlit
-google-genai
 groq
+gradio_client
 requests
-Pillow
