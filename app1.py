@@ -99,7 +99,7 @@ if groq_api_key and hf_token:
 # AI Inference Helper Functions
 # ---------------------------------------------------------
 def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
-    """Generates a story using Groq with multi-model fallback support."""
+    """Generates a story using Groq with active production models."""
     client = Groq(api_key=api_key)
     
     system_prompt = (
@@ -108,12 +108,13 @@ def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
         "Write clear, vivid, cinematic sentences."
     )
     
-    # Priority list of supported Groq models
+    # Active production model IDs supported on Groq's free tier
     models_to_try = [
         "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768"
+        "llama-3.1-8b-instant"
     ]
+
+    last_error = None
 
     for model in models_to_try:
         try:
@@ -128,10 +129,10 @@ def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            # If a model fails, try the next one in the list
+            last_error = e
             continue
 
-    st.error("Text Generation Error: All Groq models failed to respond. Please check your API key.")
+    st.error(f"Text Generation Error: {last_error}")
     return None
 
 def generate_ai_image(prompt: str, api_key: str) -> Image.Image:
