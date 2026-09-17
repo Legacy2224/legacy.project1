@@ -91,21 +91,33 @@ else:
 # AI Inference Helper Functions
 # ---------------------------------------------------------
 def generate_ai_story(prompt: str, max_words: int, api_key: str) -> str:
-    """Generates a structured story using Hugging Face's open-access LLMs."""
+    """Generates a structured story using Hugging Face's Chat Completion API."""
     try:
         client = InferenceClient(api_key=api_key)
-        system_prompt = (
-            f"Write a creative narrative story titled or based on '{prompt}'. "
-            f"The story must be approximately {max_words} words long. "
-            "Write simple, vivid, cinematic sentences."
-        )
-        response = client.text_generation(
-            prompt=system_prompt,
-            model="mistralai/Mistral-7B-Instruct-v0.2",
-            max_new_tokens=max_words * 2,
+        
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"You are a creative storyteller. Write a narrative story based on '{prompt}'. "
+                    f"Keep the total length to approximately {max_words} words. "
+                    "Write clear, vivid, cinematic sentences."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Write the story for '{prompt}'."
+            }
+        ]
+        
+        response = client.chat.completions.create(
+            model="meta-llama/Llama-3.2-3B-Instruct",
+            messages=messages,
+            max_tokens=max_words * 3,
             temperature=0.7
         )
-        return response.strip()
+        
+        return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"Text Generation Error: {e}")
         return None
